@@ -57,8 +57,8 @@ class CarCounter:
         self.video_source = video_source
         self.model = YOLO(model_path)
         self.track_history = defaultdict(lambda: [])
-        self.left_to_right_start_times = {} # track_id -> start_time
-        self.right_to_left_start_times = {} # track_id -> start_time
+        self.first_seen = {}       # track_id -> (x, time)
+        self.last_seen = {}        # track_id -> (x, time)
         self.vehicle_speeds = {}   # track_id -> speed
         self.vehicle_types = {}    # track_id -> vehicle type
         self.ids_in_roi = set()    # track IDs currently in ROI
@@ -93,6 +93,10 @@ class CarCounter:
         # Calculate line positions in pixels
         self.line_left_x = int(self.width * LINE_LEFT_X_RATIO)
         self.line_right_x = int(self.width * LINE_RIGHT_X_RATIO)
+        
+        # Calculate pixels per meter for speed calculation
+        self.pixels_between_lines = self.line_right_x - self.line_left_x
+        self.pixels_per_meter = self.pixels_between_lines / DISTANCE_METERS
         
         # Calculate ROI in pixels
         self.roi_x1 = int(self.width * ROI_TOP_LEFT_X)
@@ -238,78 +242,22 @@ class CarCounter:
                     vehicle_type = CLASS_NAMES.get(class_id, "Vehicle")
                     self.vehicle_types[track_id] = vehicle_type
                     
-                    # Log entry
+                    # Track first and last seen positions
+                    current_time = time.time()
+                    
+                    # Log entry and record first position
                     if track_id not in self.ids_in_roi:
+                        self.first_seen[track_id] = (center_x, current_time)
                         self.log_message(f"{vehicle_type} {track_id} entered ROI at X={center_x:.1f}")
                     
-                    # Store track history
+                    # Always update last seen position
+                    self.last_seen[track_id] = (center_x, current_time)
+                    
+                    # Store track history for visualization
                     track = self.track_history[track_id]
                     track.append((center_x, center_y))
                     if len(track) > 30:  # retain 30 frames
                         track.pop(0)
-
-                    # Speed Estimation Logic (X-axis movement)
-                    # This continues even if vehicle temporarily leaves ROI
-                    if len(track) > 1:
-                        prev_x = track[-2][0]
-                        curr_x = track[-1][0]
-                        
-                        # Debug position (commented out to reduce noise)
-                        # self.log_message(f"ID {track_id} X: {curr_x:.1f} (L:{self.line_left_x} R:{self.line_right_x})")
-
-                        # --- Moving Left to Right (Increasing X) ---
-                        # Crosses Left Line (Start Timer)
-                        if prev_x < self.line_left_x and curr_x >= self.line_left_x:
-                            self.left_to_right_start_times[track_id] = time.time()
-                            self.log_message(f"[Debug] Car {track_id} started L->R timer")
-                        
-                        # Crosses Right Line (End Timer)
-                        if prev_x < self.line_right_x and curr_x >= self.line_right_x:
-                            if track_id in self.left_to_right_start_times:
-                                start_time = self.left_to_right_start_times[track_id]
-                                end_time = time.time()
-                                duration = end_time - start_time
-                                
-                                # Check duration is reasonable (not too fast or too slow)
-                                if 0 < duration <= MAX_CROSSING_DURATION:
-                                    speed_mps = DISTANCE_METERS / duration
-                                    speed_mph = speed_mps * 2.23694
-                                    
-                                    self.vehicle_speeds[track_id] = speed_mph
-                                    self.car_count += 1
-                                    vehicle_type = self.vehicle_types.get(track_id, "Vehicle")
-                                    self.log_message(f"SAW {vehicle_type.upper()}: id={track_id}, speed={speed_mph:.1f} MPH, dir=northbound, total count={self.car_count}")
-                                    self.save_snapshot(frame, track_id, speed_mph)
-                                elif duration > MAX_CROSSING_DURATION:
-                                    self.log_message(f"[Debug] Car {track_id} L->R timer expired ({duration:.1f}s)")
-                                del self.left_to_right_start_times[track_id]
-
-                        # --- Moving Right to Left (Decreasing X) ---
-                        # Crosses Right Line (Start Timer)
-                        if prev_x > self.line_right_x and curr_x <= self.line_right_x:
-                            self.right_to_left_start_times[track_id] = time.time()
-                            self.log_message(f"[Debug] Car {track_id} started R->L timer")
-                        
-                        # Crosses Left Line (End Timer)
-                        if prev_x > self.line_left_x and curr_x <= self.line_left_x:
-                            if track_id in self.right_to_left_start_times:
-                                start_time = self.right_to_left_start_times[track_id]
-                                end_time = time.time()
-                                duration = end_time - start_time
-                                
-                                # Check duration is reasonable (not too fast or too slow)
-                                if 0 < duration <= MAX_CROSSING_DURATION:
-                                    speed_mps = DISTANCE_METERS / duration
-                                    speed_mph = speed_mps * 2.23694
-                                    
-                                    self.vehicle_speeds[track_id] = speed_mph
-                                    self.car_count += 1
-                                    vehicle_type = self.vehicle_types.get(track_id, "Vehicle")
-                                    self.log_message(f"SAW {vehicle_type.upper()}: id={track_id}, speed={speed_mph:.1f} MPH, dir=southbound, total count={self.car_count}")
-                                    self.save_snapshot(frame, track_id, speed_mph)
-                                elif duration > MAX_CROSSING_DURATION:
-                                    self.log_message(f"[Debug] Car {track_id} R->L timer expired ({duration:.1f}s)")
-                                del self.right_to_left_start_times[track_id]
 
                     # Draw bounding box and ID
                     cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (255, 0, 0), 2)
@@ -322,26 +270,45 @@ class CarCounter:
                     
                     cv2.putText(frame, label, (int(x1), int(y1) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
             
-            # Check exits and cleanup stale timers
+            # Check exits and calculate speed
             for track_id in self.ids_in_roi:
                 if track_id not in current_roi_ids:
                     vehicle_type = self.vehicle_types.get(track_id, "Vehicle")
-                    self.log_message(f"{vehicle_type} {track_id} exited ROI")
+                    
+                    # Calculate speed if we have first and last positions
+                    if track_id in self.first_seen and track_id in self.last_seen:
+                        first_x, first_time = self.first_seen[track_id]
+                        last_x, last_time = self.last_seen[track_id]
+                        
+                        duration = last_time - first_time
+                        distance_pixels = abs(last_x - first_x)
+                        distance_meters = distance_pixels / self.pixels_per_meter
+                        
+                        # Only calculate if vehicle moved reasonable distance and time
+                        if duration > 0.5 and distance_meters > 1.0:
+                            speed_mps = distance_meters / duration
+                            speed_mph = speed_mps * 2.23694
+                            
+                            # Determine direction
+                            if last_x > first_x:
+                                direction = "northbound"
+                            else:
+                                direction = "southbound"
+                            
+                            self.vehicle_speeds[track_id] = speed_mph
+                            self.car_count += 1
+                            self.log_message(f"SAW {vehicle_type.upper()}: id={track_id}, speed={speed_mph:.1f} MPH, dir={direction}, distance={distance_meters:.1f}m, time={duration:.1f}s, total count={self.car_count}")
+                            self.save_snapshot(frame, track_id, speed_mph)
+                        else:
+                            self.log_message(f"{vehicle_type} {track_id} exited ROI (insufficient data: {distance_meters:.1f}m in {duration:.1f}s)")
+                    else:
+                        self.log_message(f"{vehicle_type} {track_id} exited ROI")
+                    
+                    # Cleanup tracking data
+                    self.first_seen.pop(track_id, None)
+                    self.last_seen.pop(track_id, None)
+            
             self.ids_in_roi = current_roi_ids
-            
-            # Clean up expired timers (vehicles that started but never finished)
-            current_time = time.time()
-            expired_l2r = [tid for tid, start_time in self.left_to_right_start_times.items() 
-                          if current_time - start_time > MAX_CROSSING_DURATION]
-            for tid in expired_l2r:
-                self.log_message(f"[Debug] Cleaning expired L->R timer for vehicle {tid}")
-                del self.left_to_right_start_times[tid]
-            
-            expired_r2l = [tid for tid, start_time in self.right_to_left_start_times.items() 
-                          if current_time - start_time > MAX_CROSSING_DURATION]
-            for tid in expired_r2l:
-                self.log_message(f"[Debug] Cleaning expired R->L timer for vehicle {tid}")
-                del self.right_to_left_start_times[tid]
 
             # Draw Total Count
             cv2.putText(frame, f"Count: {self.car_count}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
