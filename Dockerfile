@@ -2,7 +2,9 @@
 FROM python:3.11-slim
 
 # Install system dependencies for OpenCV and RTSP/H.264 support
+# python3-opencv: System OpenCV with GStreamer support (pip version doesn't have it)
 RUN apt-get update && apt-get install -y \
+    python3-opencv \
     libglib2.0-0 \
     libsm6 \
     libxext6 \

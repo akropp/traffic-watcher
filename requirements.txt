@@ -1,4 +1,4 @@
-opencv-python-headless
+# opencv installed via system package (python3-opencv) for GStreamer support
 ultralytics
 numpy
 lap>=0.5.12
