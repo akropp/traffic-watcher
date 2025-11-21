@@ -48,10 +48,11 @@ COPY requirements.txt .
 # Install Python dependencies
 # CRITICAL ORDER: Install torch first (no opencv dep), then manual deps, then ultralytics with --no-deps
 # This prevents opencv-python from being installed, allowing system opencv with GStreamer to be used
-RUN python3 -m pip install --no-cache-dir --upgrade pip && \
-    python3 -m pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
-    python3 -m pip install --no-cache-dir -r requirements.txt && \
-    python3 -m pip install --no-cache-dir --no-deps ultralytics
+# --break-system-packages is safe in Docker containers (isolated environment)
+RUN python3 -m pip install --no-cache-dir --break-system-packages --upgrade pip && \
+    python3 -m pip install --no-cache-dir --break-system-packages torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
+    python3 -m pip install --no-cache-dir --break-system-packages -r requirements.txt && \
+    python3 -m pip install --no-cache-dir --break-system-packages --no-deps ultralytics
 
 # Copy application files
 COPY main.py .
