@@ -13,10 +13,11 @@ services:
       # GStreamer pipeline with VA-API hardware decoding
       # rtspsrc: RTSP source with TCP transport
       # rtph264depay: Depacketize RTP H.264
+      # h264parse: Parse and convert H.264 stream format for decoder
       # vah264dec: Modern VA-API H.264 decoder (headless-compatible)
       # videoconvert: Convert to format OpenCV can read
       # appsink: Output for OpenCV VideoCapture
-      - VIDEO_SOURCE=rtspsrc location=rtsp://frigate.thekropp.com:8554/driveway protocols=tcp ! rtph264depay ! vah264dec ! videoconvert ! appsink
+      - VIDEO_SOURCE=rtspsrc location=rtsp://frigate.thekropp.com:8554/driveway protocols=tcp ! rtph264depay ! h264parse ! vah264dec ! videoconvert ! appsink
       
       # Video downsampling (0.5 = half resolution, 1.0 = original)
       # Use 0.5 for faster CPU processing, 1.0 for better accuracy
