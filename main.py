@@ -83,10 +83,15 @@ class CarCounter:
         database.init_db()
         
         # Open video
-        print(f"Opening video source: {self.video_source}")
-        print(f"FFmpeg options: {os.environ.get('OPENCV_FFMPEG_CAPTURE_OPTIONS', 'None')}")
+        print(f"Opening video source: {self.video_source[:80]}...")
         
-        self.cap = cv2.VideoCapture(self.video_source)
+        # Use CAP_GSTREAMER backend if video source looks like a GStreamer pipeline
+        if 'rtspsrc' in self.video_source or '!' in self.video_source:
+            print("Detected GStreamer pipeline, using GStreamer backend")
+            self.cap = cv2.VideoCapture(self.video_source, cv2.CAP_GSTREAMER)
+        else:
+            print("Using default backend (FFmpeg)")
+            self.cap = cv2.VideoCapture(self.video_source)
         if not self.cap.isOpened():
             print(f"Error: Could not open video source {self.video_source}")
             return

@@ -10,19 +10,16 @@ services:
       # Set to 'false' if you want to enable GUI mode (requires X11 forwarding)
       - HEADLESS=true
       
-      # RTSP video source
-      - VIDEO_SOURCE=rtsp://frigate.thekropp.com:8554/driveway
+      # GStreamer pipeline with VAAPI hardware decoding
+      # rtspsrc: RTSP source with TCP transport
+      # vaapih264dec: Hardware H.264 decoder using VAAPI
+      # videoconvert: Convert to format OpenCV can read
+      # appsink: Output for OpenCV VideoCapture
+      - VIDEO_SOURCE=rtspsrc location=rtsp://frigate.thekropp.com:8554/driveway protocols=tcp ! rtph264depay ! vaapih264dec ! videoconvert ! appsink
       
       # Video downsampling (0.5 = half resolution, 1.0 = original)
       # Use 0.5 for faster CPU processing, 1.0 for better accuracy
       - VIDEO_SCALE=0.5
-      
-      # RTSP options to reduce packet loss and decoding errors
-      # rtsp_transport=tcp: Use TCP instead of UDP (more reliable, less packet loss)
-      # buffer_size=1024000: Increase network buffer
-      # hwaccel=vaapi: Use Intel/AMD GPU hardware acceleration
-      # hwaccel_device=/dev/dri/renderD128: Specify GPU device
-      - OPENCV_FFMPEG_CAPTURE_OPTIONS=rtsp_transport;tcp|buffer_size;1024000|hwaccel;vaapi|hwaccel_device;/dev/dri/renderD128
       
       # Database path
       - DB_PATH=/app/data/traffic_watcher.db
@@ -38,7 +35,7 @@ services:
       # Optional: Mount config file if you want to modify settings without rebuilding
       # - ./main.py:/app/main.py:ro
     
-    # Hardware acceleration for video decoding (Intel/AMD GPUs)
+    # Hardware acceleration for GStreamer VAAPI
     devices:
       - /dev/dri:/dev/dri
     
