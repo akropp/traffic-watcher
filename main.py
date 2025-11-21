@@ -83,6 +83,9 @@ class CarCounter:
         database.init_db()
         
         # Open video
+        print(f"Opening video source: {self.video_source}")
+        print(f"FFmpeg options: {os.environ.get('OPENCV_FFMPEG_CAPTURE_OPTIONS', 'None')}")
+        
         self.cap = cv2.VideoCapture(self.video_source)
         if not self.cap.isOpened():
             print(f"Error: Could not open video source {self.video_source}")
@@ -90,6 +93,10 @@ class CarCounter:
 
         # Set buffer size to 1 to reduce latency and avoid H.264 decoding errors on old frames
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        
+        # Check backend being used
+        backend = self.cap.getBackendName()
+        print(f"OpenCV backend: {backend}")
 
         # Get video properties
         self.fps = self.cap.get(cv2.CAP_PROP_FPS)
