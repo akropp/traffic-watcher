@@ -78,10 +78,10 @@ class GStreamerCapture:
                 success, self.width = structure.get_int('width')
                 success, self.height = structure.get_int('height')
                 
-                # Get framerate (it's a fraction)
-                success, fps_num = structure.get_fraction('framerate')
+                # Get framerate (it's a fraction: numerator/denominator)
+                success, fps_num, fps_denom = structure.get_fraction('framerate')
                 if success:
-                    self.fps = float(fps_num[0]) / float(fps_num[1])
+                    self.fps = float(fps_num) / float(fps_denom)
     
     def _on_new_sample(self, appsink):
         """Callback when new frame is available"""
