@@ -10,15 +10,13 @@ services:
       # Set to 'false' if you want to enable GUI mode (requires X11 forwarding)
       - HEADLESS=true
       
-      # GStreamer pipeline with VA-API hardware decoding
-      # OpenCV 4.10+ has proper GStreamer appsink support
-      # rtspsrc: RTSP source with TCP transport
-      # rtph264depay: Depacketize RTP H.264
-      # h264parse: Parse H.264 stream
-      # vah264dec: Modern VA-API H.264 decoder (headless-compatible)
-      # videoconvert: Convert to format OpenCV can read
-      # appsink: Output for OpenCV VideoCapture
+      # GStreamer pipeline - testing if OpenCV actually instantiates vah264dec
+      # Issue: OpenCV shows GSTREAMER backend but vah264dec doesn't appear in logs
+      # This suggests OpenCV's GStreamer integration may not support custom pipelines properly
       - VIDEO_SOURCE=rtspsrc location=rtsp://frigate.thekropp.com:8554/driveway protocols=tcp ! rtph264depay ! h264parse ! vah264dec ! videoconvert ! appsink
+      
+      # Alternative: Force GStreamer to use hardware decoder via environment
+      - GST_AUTOPLUG_RANK=vah264dec:PRIMARY+1
       
       # Video downsampling (0.5 = half resolution, 1.0 = original)
       # Use 0.5 for faster CPU processing, 1.0 for better accuracy

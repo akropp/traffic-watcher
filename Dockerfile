@@ -43,6 +43,9 @@ RUN apt-get update && apt-get install -y \
     gstreamer1.0-va \
     libgstreamer1.0-dev \
     libgstreamer-plugins-base1.0-dev \
+    python3-gi \
+    gir1.2-gst-rtsp-server-1.0 \
+    gir1.2-gstreamer-1.0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install numpy for OpenCV build
