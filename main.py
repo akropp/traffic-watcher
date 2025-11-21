@@ -99,6 +99,7 @@ class CarCounter:
         print(f"Speed Measurement Lines at X={self.line_left_x} and X={self.line_right_x}")
         print(f"ROI: ({self.roi_x1}, {self.roi_y1}) to ({self.roi_x2}, {self.roi_y2})")
         print(f"Mode: {'Headless' if self.headless else 'GUI'}")
+        print(f"Video Scale: {VIDEO_SCALE}")
         
         # Setup signal handler for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
