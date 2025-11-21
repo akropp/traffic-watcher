@@ -48,7 +48,7 @@ CLASS_NAMES = {
 # ---------------------
 
 class CarCounter:
-    def __init__(self, video_source, model_path='yolov8m.pt', headless=HEADLESS):
+    def __init__(self, video_source, model_path='yolov8n.pt', headless=HEADLESS):
         self.video_source = video_source
         self.model = YOLO(model_path)
         self.track_history = defaultdict(lambda: [])
