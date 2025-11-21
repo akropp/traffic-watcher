@@ -88,6 +88,11 @@ class CarCounter:
         # Use CAP_GSTREAMER backend if video source looks like a GStreamer pipeline
         if 'rtspsrc' in self.video_source or '!' in self.video_source:
             print("Detected GStreamer pipeline, using GStreamer backend")
+            print(f"Full pipeline: {self.video_source}")
+            
+            # Enable GStreamer debug to see what's happening
+            os.environ['GST_DEBUG'] = '3'
+            
             self.cap = cv2.VideoCapture(self.video_source, cv2.CAP_GSTREAMER)
         else:
             print("Using default backend (FFmpeg)")
@@ -104,8 +109,12 @@ class CarCounter:
         try:
             backend = self.cap.getBackendName()
             print(f"OpenCV backend: {backend}")
-        except:
-            print("OpenCV backend: Unknown (could not query)")
+            
+            # Try to get pipeline string back from OpenCV
+            pipeline_prop = self.cap.get(cv2.CAP_PROP_CHANNEL)
+            print(f"OpenCV pipeline property: {pipeline_prop}")
+        except Exception as e:
+            print(f"OpenCV backend: Unknown (error: {e})")
 
         # Get video properties
         self.fps = self.cap.get(cv2.CAP_PROP_FPS)
