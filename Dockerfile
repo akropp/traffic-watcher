@@ -13,6 +13,11 @@ RUN apt-get update && apt-get install -y \
     libavcodec-extra \
     libavformat-dev \
     libswscale-dev \
+    libva2 \
+    libva-drm2 \
+    i965-va-driver \
+    intel-media-va-driver \
+    vainfo \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
