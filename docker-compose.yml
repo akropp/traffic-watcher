@@ -31,6 +31,9 @@ services:
       - LIBVA_DRIVER_NAME=iHD
       - LIBVA_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri
       
+      # Enable GStreamer debug for VA-API (2=WARNING, shows decode issues)
+      - GST_DEBUG=2
+      
       # Database path
       - DB_PATH=/app/data/traffic_watcher.db
     
