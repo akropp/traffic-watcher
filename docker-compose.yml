@@ -17,8 +17,12 @@ services:
       # Use 0.5 for faster CPU processing, 1.0 for better accuracy
       - VIDEO_SCALE=0.5
       
-      # Enable hardware video decoding (VAAPI for Intel/AMD)
-      - OPENCV_FFMPEG_CAPTURE_OPTIONS=hwaccel;vaapi|hwaccel_device;/dev/dri/renderD128
+      # RTSP options to reduce packet loss and decoding errors
+      # rtsp_transport=tcp: Use TCP instead of UDP (more reliable, less packet loss)
+      # buffer_size=1024000: Increase network buffer
+      # hwaccel=vaapi: Use Intel/AMD GPU hardware acceleration
+      # hwaccel_device=/dev/dri/renderD128: Specify GPU device
+      - OPENCV_FFMPEG_CAPTURE_OPTIONS=rtsp_transport;tcp|buffer_size;1024000|hwaccel;vaapi|hwaccel_device;/dev/dri/renderD128
       
       # Database path
       - DB_PATH=/app/data/traffic_watcher.db

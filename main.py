@@ -209,6 +209,7 @@ class CarCounter:
         retry_count = 0
         reconnect_attempts = 0
         frame_count = 0
+        
         while self.running:
             if not self.cap.isOpened():
                 if not self.reconnect_stream():
