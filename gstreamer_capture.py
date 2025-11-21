@@ -73,13 +73,15 @@ class GStreamerCapture:
             caps = pad.get_current_caps()
             if caps and caps.get_size() > 0:
                 structure = caps.get_structure(0)
-                self.width = structure.get_value('width')
-                self.height = structure.get_value('height')
                 
-                # Get framerate
-                fps_struct = structure.get_value('framerate')
-                if fps_struct:
-                    self.fps = float(fps_struct.num) / float(fps_struct.denom)
+                # Get width and height
+                success, self.width = structure.get_int('width')
+                success, self.height = structure.get_int('height')
+                
+                # Get framerate (it's a fraction)
+                success, fps_num = structure.get_fraction('framerate')
+                if success:
+                    self.fps = float(fps_num[0]) / float(fps_num[1])
     
     def _on_new_sample(self, appsink):
         """Callback when new frame is available"""
@@ -94,8 +96,8 @@ class GStreamerCapture:
                 try:
                     # Get actual dimensions from this sample's caps (might differ during startup)
                     structure = caps.get_structure(0)
-                    width = structure.get_value('width')
-                    height = structure.get_value('height')
+                    success, width = structure.get_int('width')
+                    success, height = structure.get_int('height')
                     
                     # Convert to numpy array (BGR format: height x width x 3)
                     frame_data = np.ndarray(
