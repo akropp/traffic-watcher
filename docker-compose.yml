@@ -17,6 +17,9 @@ services:
       # Use 0.5 for faster CPU processing, 1.0 for better accuracy
       - VIDEO_SCALE=0.5
       
+      # Enable hardware video decoding (VAAPI for Intel/AMD)
+      - OPENCV_FFMPEG_CAPTURE_OPTIONS=hwaccel;vaapi|hwaccel_device;/dev/dri/renderD128
+      
       # Database path
       - DB_PATH=/app/data/traffic_watcher.db
     
@@ -30,6 +33,10 @@ services:
       
       # Optional: Mount config file if you want to modify settings without rebuilding
       # - ./main.py:/app/main.py:ro
+    
+    # Hardware acceleration for video decoding (Intel/AMD GPUs)
+    devices:
+      - /dev/dri:/dev/dri
     
     # Limit CPU usage if running on shared hardware
     deploy:
