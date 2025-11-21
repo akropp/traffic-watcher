@@ -18,16 +18,15 @@ services:
       - VIDEO_SCALE=0.5
       
       # Database path
-      - DB_PATH=/app/traffic_watcher.db
+      - DB_PATH=/app/data/traffic_watcher.db
     
     volumes:
       # Persist logs and snapshots on host
       - ./logs:/app/logs
       - ./snapshots:/app/snapshots
-      - ./data:/app/data
       
-      # Shared database
-      - traffic-db:/app
+      # Shared database in local data directory
+      - ./data:/app/data
       
       # Optional: Mount config file if you want to modify settings without rebuilding
       # - ./main.py:/app/main.py:ro
@@ -57,7 +56,7 @@ services:
     
     environment:
       - WEB_PORT=5050
-      - DB_PATH=/app/traffic_watcher.db
+      - DB_PATH=/app/data/traffic_watcher.db
     
     ports:
       - "5050:5050"
@@ -67,8 +66,8 @@ services:
       - ./snapshots:/app/snapshots:ro
       - ./static:/app/static:ro
       
-      # Shared database
-      - traffic-db:/app
+      # Shared database in local data directory
+      - ./data:/app/data
     
     depends_on:
       - car-counter
@@ -79,6 +78,3 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
-volumes:
-  traffic-db:
