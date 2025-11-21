@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  car-counter:
+    build: .
+    container_name: car-counter
+    restart: unless-stopped
+    
+    environment:
+      # Set to 'false' if you want to enable GUI mode (requires X11 forwarding)
+      - HEADLESS=true
+      
+      # Optional: Override video source via environment variable
+      # - VIDEO_SOURCE=rtsp://your-camera-url
+    
+    volumes:
+      # Persist logs and snapshots on host
+      - ./logs:/app/logs
+      - ./snapshots:/app/snapshots
+      
+      # Optional: Mount config file if you want to modify settings without rebuilding
+      # - ./main.py:/app/main.py:ro
+    
+    # Limit CPU usage if running on shared hardware
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+    
+    # Add logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
