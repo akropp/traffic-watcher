@@ -16,11 +16,18 @@ services:
       # Video downsampling (0.5 = half resolution, 1.0 = original)
       # Use 0.5 for faster CPU processing, 1.0 for better accuracy
       - VIDEO_SCALE=0.5
+      
+      # Database path
+      - DB_PATH=/app/traffic_watcher.db
     
     volumes:
       # Persist logs and snapshots on host
       - ./logs:/app/logs
       - ./snapshots:/app/snapshots
+      - ./data:/app/data
+      
+      # Shared database
+      - traffic-db:/app
       
       # Optional: Mount config file if you want to modify settings without rebuilding
       # - ./main.py:/app/main.py:ro
@@ -41,3 +48,37 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  web:
+    build: .
+    container_name: traffic-watcher-web
+    restart: unless-stopped
+    command: python web_app.py
+    
+    environment:
+      - WEB_PORT=5000
+      - DB_PATH=/app/traffic_watcher.db
+    
+    ports:
+      - "5000:5000"
+    
+    volumes:
+      # Share snapshots with web service
+      - ./snapshots:/app/snapshots:ro
+      - ./static:/app/static:ro
+      
+      # Shared database
+      - traffic-db:/app
+    
+    depends_on:
+      - car-counter
+    
+    # Add logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  traffic-db:

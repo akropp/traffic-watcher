@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Traffic Watcher Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+
+        header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(0, 0, 0, 0.15);
+        }
+
+        .stat-card h3 {
+            color: #667eea;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 10px;
+        }
+
+        .stat-card .value {
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .stat-card .subtitle {
+            color: #999;
+            font-size: 0.85rem;
+            margin-top: 5px;
+        }
+
+        .chart-container {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            margin-bottom: 30px;
+        }
+
+        .chart-container h2 {
+            color: #667eea;
+            margin-bottom: 20px;
+            font-size: 1.5rem;
+        }
+
+        .observations-section {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .observations-section h2 {
+            color: #667eea;
+            margin-bottom: 20px;
+            font-size: 1.5rem;
+        }
+
+        .observations-table {
+            width: 100%;
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        thead {
+            background: #f8f9fa;
+        }
+
+        th {
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+            color: #667eea;
+            border-bottom: 2px solid #e9ecef;
+        }
+
+        td {
+            padding: 15px;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        tbody tr {
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+
+        tbody tr:hover {
+            background: #f8f9fa;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+
+        .badge-northbound {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+
+        .badge-southbound {
+            background: #fce4ec;
+            color: #c2185b;
+        }
+
+        .badge-car {
+            background: #e8f5e9;
+            color: #388e3c;
+        }
+
+        .badge-truck {
+            background: #fff3e0;
+            color: #f57c00;
+        }
+
+        .badge-bus {
+            background: #f3e5f5;
+            color: #7b1fa2;
+        }
+
+        .badge-motorcycle {
+            background: #e0f2f1;
+            color: #00796b;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            overflow: auto;
+        }
+
+        .modal.active {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            max-width: 900px;
+            width: 90%;
+            max-height: 90vh;
+            overflow: auto;
+            position: relative;
+        }
+
+        .close {
+            position: absolute;
+            top: 20px;
+            right: 25px;
+            font-size: 35px;
+            font-weight: bold;
+            color: #999;
+            cursor: pointer;
+            transition: color 0.2s;
+        }
+
+        .close:hover {
+            color: #333;
+        }
+
+        .modal-image {
+            width: 100%;
+            height: auto;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .modal-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .detail-item {
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+
+        .detail-item label {
+            display: block;
+            font-size: 0.85rem;
+            color: #999;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 5px;
+        }
+
+        .detail-item value {
+            display: block;
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .refresh-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 20px;
+            transition: background 0.3s ease;
+        }
+
+        .refresh-btn:hover {
+            background: #5568d3;
+        }
+
+        @media (max-width: 768px) {
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+
+            header h1 {
+                font-size: 2rem;
+            }
+
+            .observations-table {
+                font-size: 0.85rem;
+            }
+
+            th, td {
+                padding: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Traffic Watcher Dashboard</h1>
+            <p>Real-time vehicle tracking and analytics</p>
+        </header>
+
+        <div class="stats-grid" id="statsGrid">
+            <div class="stat-card">
+                <h3>Total Vehicles</h3>
+                <div class="value" id="totalVehicles">-</div>
+                <div class="subtitle">All time</div>
+            </div>
+            <div class="stat-card">
+                <h3>Last 24 Hours</h3>
+                <div class="value" id="last24h">-</div>
+                <div class="subtitle">Recent activity</div>
+            </div>
+            <div class="stat-card">
+                <h3>Average Speed</h3>
+                <div class="value" id="avgSpeed">-</div>
+                <div class="subtitle">MPH</div>
+            </div>
+            <div class="stat-card">
+                <h3>Northbound</h3>
+                <div class="value" id="northbound">-</div>
+                <div class="subtitle">Vehicles</div>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <h2>Average Vehicles by Hour</h2>
+            <canvas id="hourlyChart"></canvas>
+        </div>
+
+        <div class="observations-section">
+            <h2>Recent Observations</h2>
+            <button class="refresh-btn" onclick="loadData()">Refresh Data</button>
+            <div class="observations-table">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Type</th>
+                            <th>Timestamp</th>
+                            <th>Direction</th>
+                            <th>Speed (MPH)</th>
+                            <th>Distance (m)</th>
+                            <th>Duration (s)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="observationsTable">
+                        <tr>
+                            <td colspan="7" class="loading">Loading observations...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for Image Viewer -->
+    <div id="imageModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal()">&times;</span>
+            <img id="modalImage" class="modal-image" src="" alt="Vehicle Snapshot">
+            <div class="modal-details" id="modalDetails"></div>
+        </div>
+    </div>
+
+    <script>
+        let hourlyChart = null;
+
+        // Load all data
+        async function loadData() {
+            await Promise.all([
+                loadStats(),
+                loadHourlyData(),
+                loadObservations()
+            ]);
+        }
+
+        // Load statistics
+        async function loadStats() {
+            try {
+                const response = await fetch('/api/stats');
+                const result = await response.json();
+                
+                if (result.success) {
+                    const stats = result.data;
+                    document.getElementById('totalVehicles').textContent = stats.total || 0;
+                    document.getElementById('last24h').textContent = stats.last_24h || 0;
+                    document.getElementById('avgSpeed').textContent = stats.average_speed?.toFixed(1) || '0.0';
+                    document.getElementById('northbound').textContent = stats.by_direction?.northbound || 0;
+                }
+            } catch (error) {
+                console.error('Error loading stats:', error);
+            }
+        }
+
+        // Load hourly data and create chart
+        async function loadHourlyData() {
+            try {
+                const response = await fetch('/api/hourly-averages');
+                const result = await response.json();
+                
+                if (result.success) {
+                    createHourlyChart(result.data);
+                }
+            } catch (error) {
+                console.error('Error loading hourly data:', error);
+            }
+        }
+
+        // Create hourly chart
+        function createHourlyChart(data) {
+            // Ensure we have data for all 24 hours
+            const hours = Array.from({length: 24}, (_, i) => i);
+            const averages = hours.map(hour => {
+                const found = data.find(d => d.hour === hour);
+                return found ? found.average : 0;
+            });
+
+            const ctx = document.getElementById('hourlyChart').getContext('2d');
+            
+            if (hourlyChart) {
+                hourlyChart.destroy();
+            }
+
+            hourlyChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: hours.map(h => `${h}:00`),
+                    datasets: [{
+                        label: 'Average Vehicles per Hour',
+                        data: averages,
+                        backgroundColor: 'rgba(102, 126, 234, 0.6)',
+                        borderColor: 'rgba(102, 126, 234, 1)',
+                        borderWidth: 2,
+                        borderRadius: 5
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                stepSize: 1
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                            padding: 12,
+                            titleFont: {
+                                size: 14
+                            },
+                            bodyFont: {
+                                size: 13
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Load observations
+        async function loadObservations() {
+            try {
+                const response = await fetch('/api/observations?limit=100');
+                const result = await response.json();
+                
+                if (result.success) {
+                    displayObservations(result.data);
+                }
+            } catch (error) {
+                console.error('Error loading observations:', error);
+                document.getElementById('observationsTable').innerHTML = 
+                    '<tr><td colspan="7" class="loading">Error loading observations</td></tr>';
+            }
+        }
+
+        // Display observations in table
+        function displayObservations(observations) {
+            const tbody = document.getElementById('observationsTable');
+            
+            if (observations.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="loading">No observations yet</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = observations.map(obs => {
+                const timestamp = new Date(obs.timestamp).toLocaleString();
+                const vehicleType = obs.vehicle_type.toLowerCase();
+                const directionClass = obs.direction === 'northbound' ? 'badge-northbound' : 'badge-southbound';
+                const typeClass = `badge-${vehicleType}`;
+                
+                return `
+                    <tr onclick="showObservation(${obs.id})">
+                        <td>${obs.observation_number}</td>
+                        <td><span class="badge ${typeClass}">${obs.vehicle_type}</span></td>
+                        <td>${timestamp}</td>
+                        <td><span class="badge ${directionClass}">${obs.direction}</span></td>
+                        <td>${obs.speed.toFixed(1)}</td>
+                        <td>${obs.distance.toFixed(1)}</td>
+                        <td>${obs.duration.toFixed(1)}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // Show observation details in modal
+        async function showObservation(id) {
+            try {
+                const response = await fetch(`/api/observations/${id}`);
+                const result = await response.json();
+                
+                if (result.success) {
+                    const obs = result.data;
+                    const modal = document.getElementById('imageModal');
+                    const modalImage = document.getElementById('modalImage');
+                    const modalDetails = document.getElementById('modalDetails');
+                    
+                    // Set image
+                    const imagePath = obs.image_filename.replace('snapshots/', '');
+                    modalImage.src = `/snapshots/${imagePath}`;
+                    
+                    // Set details
+                    const timestamp = new Date(obs.timestamp).toLocaleString();
+                    modalDetails.innerHTML = `
+                        <div class="detail-item">
+                            <label>Observation #</label>
+                            <value>${obs.observation_number}</value>
+                        </div>
+                        <div class="detail-item">
+                            <label>Vehicle Type</label>
+                            <value>${obs.vehicle_type}</value>
+                        </div>
+                        <div class="detail-item">
+                            <label>Timestamp</label>
+                            <value>${timestamp}</value>
+                        </div>
+                        <div class="detail-item">
+                            <label>Direction</label>
+                            <value>${obs.direction}</value>
+                        </div>
+                        <div class="detail-item">
+                            <label>Speed</label>
+                            <value>${obs.speed.toFixed(1)} MPH</value>
+                        </div>
+                        <div class="detail-item">
+                            <label>Distance</label>
+                            <value>${obs.distance.toFixed(1)} m</value>
+                        </div>
+                        <div class="detail-item">
+                            <label>Duration</label>
+                            <value>${obs.duration.toFixed(1)} s</value>
+                        </div>
+                    `;
+                    
+                    modal.classList.add('active');
+                }
+            } catch (error) {
+                console.error('Error loading observation:', error);
+            }
+        }
+
+        // Close modal
+        function closeModal() {
+            document.getElementById('imageModal').classList.remove('active');
+        }
+
+        // Close modal on outside click
+        window.onclick = function(event) {
+            const modal = document.getElementById('imageModal');
+            if (event.target === modal) {
+                closeModal();
+            }
+        }
+
+        // Auto-refresh every 30 seconds
+        setInterval(loadData, 30000);
+
+        // Initial load
+        loadData();
+    </script>
+</body>
+</html>

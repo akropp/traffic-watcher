@@ -6,6 +6,8 @@ import numpy as np
 from collections import defaultdict
 import signal
 import sys
+from datetime import datetime
+import database
 
 # --- CONFIGURATION ---
 # RTSP Stream URL (Replace with your camera's URL)
@@ -71,6 +73,9 @@ class CarCounter:
         os.makedirs("snapshots", exist_ok=True)
         self.log_file = "logs/car_log.txt"
         
+        # Initialize database
+        database.init_db()
+        
         # Open video
         self.cap = cv2.VideoCapture(self.video_source)
         if not self.cap.isOpened():
@@ -128,7 +133,7 @@ class CarCounter:
             with open(self.log_file, "a") as f:
                 f.write(full_msg + "\n")
 
-    def save_snapshot(self, frame, track_id, speed_mph):
+    def save_snapshot(self, frame, track_id, speed_mph, direction, duration, distance):
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         vehicle_type = self.vehicle_types.get(track_id, "Vehicle").lower()
         filename = f"snapshots/{vehicle_type}_{track_id}_{timestamp}.jpg"
@@ -142,6 +147,24 @@ class CarCounter:
         
         cv2.imwrite(filename, snapshot)
         print(f"[Snapshot] Saved to {filename}")
+        
+        # Save to database
+        try:
+            db_timestamp = datetime.now().isoformat()
+            database.add_observation(
+                observation_number=self.car_count,
+                vehicle_type=self.vehicle_types.get(track_id, 'Vehicle'),
+                timestamp=db_timestamp,
+                direction=direction,
+                duration=duration,
+                distance=distance,
+                speed=speed_mph,
+                image_filename=filename
+            )
+        except Exception as e:
+            print(f"[Database] Error saving observation: {e}")
+        
+        return filename
 
     def reconnect_stream(self):
         """Reconnect to the video stream"""
@@ -298,7 +321,7 @@ class CarCounter:
                             self.vehicle_speeds[track_id] = speed_mph
                             self.car_count += 1
                             self.log_message(f"SAW {vehicle_type.upper()}: id={track_id}, speed={speed_mph:.1f} MPH, dir={direction}, distance={distance_meters:.1f}m, time={duration:.1f}s, total count={self.car_count}")
-                            self.save_snapshot(frame, track_id, speed_mph)
+                            self.save_snapshot(frame, track_id, speed_mph, direction, duration, distance_meters)
                         else:
                             self.log_message(f"{vehicle_type} {track_id} exited ROI (insufficient data: {distance_meters:.1f}m in {duration:.1f}s)")
                     else:

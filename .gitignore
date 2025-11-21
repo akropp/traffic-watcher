@@ -29,6 +29,13 @@ ENV/
 # Output directories
 logs/
 snapshots/
+data/
+
+# Database
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
 
 # YOLO models (downloaded on first run)
 *.pt
