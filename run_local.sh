@@ -5,7 +5,7 @@
 echo "Starting Traffic Watcher Web Interface..."
 echo "=========================================="
 echo ""
-echo "Starting web server on http://localhost:5000"
+echo "Starting web server on http://localhost:5050"
 echo "Press Ctrl+C to stop both services"
 echo ""
 

@@ -40,7 +40,7 @@ A web-based dashboard is now available to view vehicle observations, statistics,
 When running with Docker Compose, the web interface is automatically started and available at:
 
 ```
-http://localhost:5000
+http://localhost:5050
 ```
 
 **Features:**
@@ -63,7 +63,7 @@ python main.py
 python web_app.py
 ```
 
-Then visit `http://localhost:5000` in your browser.
+Then visit `http://localhost:5050` in your browser.
 
 **Database:**
 

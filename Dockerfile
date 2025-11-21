@@ -29,6 +29,9 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 # Copy application files
 COPY main.py .
+COPY database.py .
+COPY web_app.py .
+COPY static/ ./static/
 
 # Pre-download YOLO model to avoid runtime download
 RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"

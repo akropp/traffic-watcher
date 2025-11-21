@@ -56,11 +56,11 @@ services:
     command: python web_app.py
     
     environment:
-      - WEB_PORT=5000
+      - WEB_PORT=5050
       - DB_PATH=/app/traffic_watcher.db
     
     ports:
-      - "5000:5000"
+      - "5050:5050"
     
     volumes:
       # Share snapshots with web service
