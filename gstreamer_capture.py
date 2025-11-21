@@ -91,21 +91,28 @@ class GStreamerCapture:
             # Get frame data
             success, map_info = buffer.map(Gst.MapFlags.READ)
             if success:
-                # Convert to numpy array
-                frame_data = np.ndarray(
-                    shape=(self.height, self.width, 3),
-                    dtype=np.uint8,
-                    buffer=map_info.data
-                )
-                # GStreamer uses BGR by default if we specified it in caps
-                frame = frame_data.copy()
-                buffer.unmap(map_info)
-                
-                # Add to queue (non-blocking, drop if full)
                 try:
-                    self.frame_queue.put_nowait(frame)
-                except queue.Full:
-                    pass  # Drop frame if queue is full
+                    # Get actual dimensions from this sample's caps (might differ during startup)
+                    structure = caps.get_structure(0)
+                    width = structure.get_value('width')
+                    height = structure.get_value('height')
+                    
+                    # Convert to numpy array (BGR format: height x width x 3)
+                    frame_data = np.ndarray(
+                        shape=(height, width, 3),
+                        dtype=np.uint8,
+                        buffer=map_info.data
+                    )
+                    # Make a copy before unmapping
+                    frame = frame_data.copy()
+                    
+                    # Add to queue (non-blocking, drop if full)
+                    try:
+                        self.frame_queue.put_nowait(frame)
+                    except queue.Full:
+                        pass  # Drop frame if queue is full
+                finally:
+                    buffer.unmap(map_info)
         
         return Gst.FlowReturn.OK
     
