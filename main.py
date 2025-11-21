@@ -139,18 +139,45 @@ class CarCounter:
         cv2.imwrite(filename, snapshot)
         print(f"[Snapshot] Saved to {filename}")
 
+    def reconnect_stream(self):
+        """Reconnect to the video stream"""
+        print("Attempting to reconnect to stream...")
+        self.cap.release()
+        time.sleep(2)
+        self.cap = cv2.VideoCapture(self.video_source)
+        if self.cap.isOpened():
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            print("Successfully reconnected to stream")
+            return True
+        print("Failed to reconnect to stream")
+        return False
+
     def process_video(self):
         retry_count = 0
+        reconnect_attempts = 0
         frame_count = 0
-        while self.cap.isOpened() and self.running:
+        while self.running:
+            if not self.cap.isOpened():
+                if not self.reconnect_stream():
+                    reconnect_attempts += 1
+                    if reconnect_attempts > 3:
+                        print("Error: Failed to reconnect after 3 attempts. Exiting.")
+                        break
+                    time.sleep(5)
+                    continue
+                reconnect_attempts = 0
+            
             success, frame = self.cap.read()
             
             if not success or frame is None:
                 retry_count += 1
-                print(f"Warning: Failed to read frame (Attempt {retry_count}/5)")
-                if retry_count > 5:
-                    print("Error: Video stream ended or failed repeatedly.")
-                    break
+                print(f"Warning: Failed to read frame (Attempt {retry_count}/10)")
+                if retry_count > 10:
+                    print("Stream appears disconnected. Will attempt reconnection...")
+                    retry_count = 0
+                    self.cap.release()
+                    time.sleep(1)
+                    continue
                 time.sleep(0.5)
                 continue
             
