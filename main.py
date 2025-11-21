@@ -28,8 +28,8 @@ VIDEO_SCALE = float(os.getenv('VIDEO_SCALE', '1.0'))
 
 # Lines positions (0-1 relative to frame height/width)
 # Vertical lines for left-to-right / right-to-left traffic
-LINE_LEFT_X_RATIO = 0.63
-LINE_RIGHT_X_RATIO = 0.76
+LINE_LEFT_X_RATIO = 0.64
+LINE_RIGHT_X_RATIO = 0.77
 
 # Region of Interest (ROI) for detection (0-1 relative to frame dimensions)
 # Top-Left (x, y) and Bottom-Right (x, y)
