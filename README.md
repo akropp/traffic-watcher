@@ -31,52 +31,6 @@ docker-compose down
 
 The logs and snapshots will be saved to `./logs` and `./snapshots` on your host machine.
 
-## Web Dashboard
-
-A web-based dashboard is now available to view vehicle observations, statistics, and analytics.
-
-**Accessing the Dashboard:**
-
-When running with Docker Compose, the web interface is automatically started and available at:
-
-```
-http://localhost:5050
-```
-
-**Features:**
-
-- **Real-time Statistics**: View total vehicle count, last 24-hour activity, average speed, and directional counts
-- **Hourly Chart**: Interactive chart showing average vehicles per hour of day
-- **Observations Table**: Browse all detected vehicles with detailed information
-- **Image Viewer**: Click on any observation to view the captured snapshot
-- **Auto-refresh**: Dashboard updates every 30 seconds automatically
-
-**Manual Setup (Web Interface):**
-
-If running without Docker, you can start the web interface separately:
-
-```bash
-# Start the main tracker (in one terminal)
-python main.py
-
-# Start the web interface (in another terminal)
-python web_app.py
-```
-
-Then visit `http://localhost:5050` in your browser.
-
-**Database:**
-
-All observations are stored in a SQLite database (`traffic_watcher.db`) with the following information:
-- Observation number
-- Vehicle type (Car, Truck, Bus, Motorcycle)
-- Timestamp
-- Direction (northbound/southbound)
-- Duration (time taken to cross measurement zone)
-- Distance (meters traveled)
-- Speed (MPH)
-- Snapshot image filename
-
 ## Manual Setup (Without Docker)
 
 **1. Install Dependencies:**
