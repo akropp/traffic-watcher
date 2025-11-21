@@ -51,8 +51,7 @@ COPY requirements.txt .
 RUN python3 -m pip install --no-cache-dir --upgrade pip && \
     python3 -m pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
     python3 -m pip install --no-cache-dir -r requirements.txt && \
-    python3 -m pip install --no-cache-dir --no-deps ultralytics && \
-    python3 -m pip uninstall -y opencv-python opencv-python-headless || true
+    python3 -m pip install --no-cache-dir --no-deps ultralytics
 
 # Copy application files
 COPY main.py .
@@ -60,8 +59,11 @@ COPY database.py .
 COPY web_app.py .
 COPY static/ ./static/
 
-# Pre-download YOLO model to avoid runtime download
-RUN python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
+# Pre-download YOLO model (this might auto-install opencv-python, we'll remove it after)
+RUN python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')" && \
+    python3 -m pip uninstall -y opencv-python opencv-python-headless opencv-contrib-python opencv-contrib-python-headless 2>/dev/null || true && \
+    echo "OpenCV location:" && python3 -c "import cv2; print(cv2.__file__)" && \
+    echo "GStreamer support:" && python3 -c "import cv2; print('YES' if 'gstreamer' in cv2.getBuildInformation().lower() else 'NO')"
 
 # Create directories for outputs
 RUN mkdir -p /app/logs /app/snapshots
