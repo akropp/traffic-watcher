@@ -1,4 +1,4 @@
-opencv-python
+opencv-python-headless
 ultralytics
 numpy
 lap>=0.5.12
