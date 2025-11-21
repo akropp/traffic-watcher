@@ -97,14 +97,18 @@ class CarCounter:
         if not self.cap.isOpened():
             print(f"Error: Could not open video source {self.video_source}")
             print("GStreamer error details should be printed above")
+            self.cap.release()
             return
 
         # Set buffer size to 1 to reduce latency and avoid H.264 decoding errors on old frames
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         
         # Check backend being used
-        backend = self.cap.getBackendName()
-        print(f"OpenCV backend: {backend}")
+        try:
+            backend = self.cap.getBackendName()
+            print(f"OpenCV backend: {backend}")
+        except:
+            print("OpenCV backend: Unknown (could not query)")
 
         # Get video properties
         self.fps = self.cap.get(cv2.CAP_PROP_FPS)
