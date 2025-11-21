@@ -1,5 +1,15 @@
 # opencv installed via system package (python3-opencv) for GStreamer support
-ultralytics
+# ultralytics dependencies (manually specified to avoid opencv-python)
 numpy
+scipy
+matplotlib
+pyyaml
+requests
+tqdm
+psutil
+py-cpuinfo
+pandas
+seaborn
+pillow
 lap>=0.5.12
 flask

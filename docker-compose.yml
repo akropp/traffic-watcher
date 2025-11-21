@@ -68,7 +68,7 @@ services:
     build: .
     container_name: traffic-watcher-web
     restart: unless-stopped
-    command: python web_app.py
+    command: python3 web_app.py
     
     environment:
       - WEB_PORT=5050

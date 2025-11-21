@@ -1,5 +1,12 @@
-# Use Python slim image for smaller footprint
-FROM python:3.11-slim
+# Use Debian base with Python 3.11 for system OpenCV compatibility
+FROM debian:bookworm-slim
+
+# Install Python 3.11
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install system dependencies for OpenCV and RTSP/H.264 support
 # python3-opencv: System OpenCV with GStreamer support (pip version doesn't have it)
@@ -39,10 +46,13 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install Python dependencies
-# Use CPU-only version of PyTorch for smaller size and better compatibility
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
-    pip install --no-cache-dir -r requirements.txt
+# CRITICAL ORDER: Install torch first (no opencv dep), then manual deps, then ultralytics with --no-deps
+# This prevents opencv-python from being installed, allowing system opencv with GStreamer to be used
+RUN python3 -m pip install --no-cache-dir --upgrade pip && \
+    python3 -m pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
+    python3 -m pip install --no-cache-dir -r requirements.txt && \
+    python3 -m pip install --no-cache-dir --no-deps ultralytics && \
+    python3 -m pip uninstall -y opencv-python opencv-python-headless || true
 
 # Copy application files
 COPY main.py .
@@ -51,7 +61,7 @@ COPY web_app.py .
 COPY static/ ./static/
 
 # Pre-download YOLO model to avoid runtime download
-RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
+RUN python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
 
 # Create directories for outputs
 RUN mkdir -p /app/logs /app/snapshots
@@ -61,4 +71,4 @@ ENV PYTHONUNBUFFERED=1
 ENV HEADLESS=true
 
 # Run in headless mode by default
-CMD ["python", "-u", "main.py"]
+CMD ["python3", "-u", "main.py"]
