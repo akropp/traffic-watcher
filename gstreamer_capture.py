@@ -51,8 +51,17 @@ class GStreamerCapture:
             raise RuntimeError("Failed to start GStreamer pipeline")
         
         # Wait for pipeline to negotiate caps (get video properties)
-        time.sleep(0.5)
-        self._get_video_properties()
+        # RTSP streams can take several seconds to connect
+        print("[GStreamer] Waiting for stream to connect...")
+        max_wait = 10  # seconds
+        for i in range(max_wait * 2):  # Check every 0.5 seconds
+            time.sleep(0.5)
+            self._get_video_properties()
+            if self.width > 0 and self.height > 0:
+                break
+        
+        if self.width == 0 or self.height == 0:
+            raise RuntimeError("Failed to get video properties from pipeline after 10 seconds")
         
         self.running = True
         print(f"[GStreamer] Pipeline started: {self.width}x{self.height} @ {self.fps} FPS")
