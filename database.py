@@ -87,34 +87,56 @@ def get_total_count():
         return cursor.fetchone()['count']
 
 def get_hourly_averages():
-    """Get average vehicles per hour of day"""
+    """Get average vehicles per hour of day broken down by vehicle type"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
             SELECT 
                 strftime('%H', timestamp) as hour,
+                vehicle_type,
                 COUNT(*) as count,
                 COUNT(DISTINCT DATE(timestamp)) as days
             FROM observations
-            GROUP BY hour
-            ORDER BY hour
+            GROUP BY hour, vehicle_type
+            ORDER BY hour, vehicle_type
         ''')
         results = cursor.fetchall()
         
-        # Calculate averages
-        hourly_data = []
+        # Organize data by hour and vehicle type
+        hourly_data = {}
         for row in results:
             hour = int(row['hour'])
+            vehicle_type = row['vehicle_type']
             count = row['count']
             days = row['days']
             avg = count / days if days > 0 else 0
-            hourly_data.append({
-                'hour': hour,
-                'average': round(avg, 2),
-                'total': count
-            })
+            
+            if hour not in hourly_data:
+                hourly_data[hour] = {
+                    'hour': hour,
+                    'Car': 0,
+                    'Truck': 0,
+                    'Bus': 0,
+                    'Motorcycle': 0
+                }
+            
+            hourly_data[hour][vehicle_type] = round(avg, 2)
         
-        return hourly_data
+        # Convert to list and ensure all 24 hours are present
+        result = []
+        for hour in range(24):
+            if hour in hourly_data:
+                result.append(hourly_data[hour])
+            else:
+                result.append({
+                    'hour': hour,
+                    'Car': 0,
+                    'Truck': 0,
+                    'Bus': 0,
+                    'Motorcycle': 0
+                })
+        
+        return result
 
 def get_stats():
     """Get summary statistics"""
