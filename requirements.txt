@@ -1,6 +1,7 @@
 # opencv installed via system package (python3-opencv) for GStreamer support
 # ultralytics dependencies (manually specified to avoid opencv-python)
-numpy
+# numpy pinned to 1.x for compatibility with system opencv (compiled with numpy 1.x)
+numpy<2.0
 scipy
 matplotlib
 pyyaml
