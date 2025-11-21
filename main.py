@@ -8,6 +8,7 @@ import signal
 import sys
 from datetime import datetime
 import database
+from gstreamer_capture import GStreamerCapture
 
 # --- CONFIGURATION ---
 # RTSP Stream URL (Replace with your camera's URL)
@@ -85,17 +86,24 @@ class CarCounter:
         # Open video
         print(f"Opening video source: {self.video_source[:80]}...")
         
-        # Use CAP_GSTREAMER backend if video source looks like a GStreamer pipeline
+        # Use native GStreamer if pipeline is detected (for hardware decode)
         if 'rtspsrc' in self.video_source or '!' in self.video_source:
-            print("Detected GStreamer pipeline, using GStreamer backend")
+            print("Detected GStreamer pipeline, using native GStreamer bindings")
             print(f"Full pipeline: {self.video_source}")
             
-            # Enable GStreamer debug to see what's happening
-            os.environ['GST_DEBUG'] = '3'
-            
-            self.cap = cv2.VideoCapture(self.video_source, cv2.CAP_GSTREAMER)
+            try:
+                self.cap = GStreamerCapture(self.video_source)
+            except Exception as e:
+                print(f"Failed to create GStreamer pipeline: {e}")
+                print("Falling back to OpenCV with plain RTSP URL")
+                # Extract RTSP URL from pipeline if possible
+                if 'location=' in self.video_source:
+                    rtsp_url = self.video_source.split('location=')[1].split(' ')[0]
+                    self.cap = cv2.VideoCapture(rtsp_url)
+                else:
+                    return
         else:
-            print("Using default backend (FFmpeg)")
+            print("Using OpenCV FFmpeg backend")
             self.cap = cv2.VideoCapture(self.video_source)
         if not self.cap.isOpened():
             print(f"Error: Could not open video source {self.video_source}")
@@ -108,13 +116,9 @@ class CarCounter:
         # Check backend being used
         try:
             backend = self.cap.getBackendName()
-            print(f"OpenCV backend: {backend}")
-            
-            # Try to get pipeline string back from OpenCV
-            pipeline_prop = self.cap.get(cv2.CAP_PROP_CHANNEL)
-            print(f"OpenCV pipeline property: {pipeline_prop}")
-        except Exception as e:
-            print(f"OpenCV backend: Unknown (error: {e})")
+            print(f"Video backend: {backend}")
+        except:
+            print("Video backend: Unknown (could not query)")
 
         # Get video properties
         self.fps = self.cap.get(cv2.CAP_PROP_FPS)
@@ -225,7 +229,11 @@ class CarCounter:
         
         # Use same backend as initial connection
         if 'rtspsrc' in self.video_source or '!' in self.video_source:
-            self.cap = cv2.VideoCapture(self.video_source, cv2.CAP_GSTREAMER)
+            try:
+                self.cap = GStreamerCapture(self.video_source)
+            except Exception as e:
+                print(f"Failed to recreate GStreamer pipeline: {e}")
+                return False
         else:
             self.cap = cv2.VideoCapture(self.video_source)
             

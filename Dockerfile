@@ -100,6 +100,7 @@ RUN python3 -m pip install --no-cache-dir --break-system-packages --upgrade pip 
 COPY main.py .
 COPY database.py .
 COPY web_app.py .
+COPY gstreamer_capture.py .
 COPY static/ ./static/
 
 # Pre-download YOLO model (this might auto-install opencv-python, we'll remove it after)

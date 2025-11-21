@@ -10,13 +10,10 @@ services:
       # Set to 'false' if you want to enable GUI mode (requires X11 forwarding)
       - HEADLESS=true
       
-      # GStreamer pipeline - testing if OpenCV actually instantiates vah264dec
-      # Issue: OpenCV shows GSTREAMER backend but vah264dec doesn't appear in logs
-      # This suggests OpenCV's GStreamer integration may not support custom pipelines properly
-      - VIDEO_SOURCE=rtspsrc location=rtsp://frigate.thekropp.com:8554/driveway protocols=tcp ! rtph264depay ! h264parse ! vah264dec ! videoconvert ! appsink
-      
-      # Alternative: Force GStreamer to use hardware decoder via environment
-      - GST_AUTOPLUG_RANK=vah264dec:PRIMARY+1
+      # GStreamer pipeline with VA-API hardware decode
+      # Using native GStreamer Python bindings (not OpenCV) for full control
+      # appsink name=appsink0 is required for Python bindings to find it
+      - VIDEO_SOURCE=rtspsrc location=rtsp://frigate.thekropp.com:8554/driveway protocols=tcp ! rtph264depay ! h264parse ! vah264dec ! videoconvert ! video/x-raw,format=BGR ! appsink name=appsink0 emit-signals=true
       
       # Video downsampling (0.5 = half resolution, 1.0 = original)
       # Use 0.5 for faster CPU processing, 1.0 for better accuracy
@@ -28,9 +25,6 @@ services:
       # Force VAAPI to use DRM backend (headless mode, no X11/Wayland)
       - LIBVA_DRIVER_NAME=iHD
       - LIBVA_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri
-      
-      # Enable GStreamer debug for VA-API (2=WARNING, shows decode issues)
-      - GST_DEBUG=2
       
       # Database path
       - DB_PATH=/app/data/traffic_watcher.db
