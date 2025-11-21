@@ -64,9 +64,15 @@ class CarCounter:
         self.vehicle_speeds = {}   # track_id -> speed
         self.vehicle_types = {}    # track_id -> vehicle type
         self.ids_in_roi = set()    # track IDs currently in ROI
+        self.recent_exits = {}     # track_id -> (x, time, vehicle_type) - for merging rapid re-entries
+        self.id_mapping = {}       # new_id -> original_id - for tracking ID reassignments
         self.car_count = 0
         self.headless = headless
         self.running = True
+        
+        # Thresholds for merging rapid re-entries
+        self.reentry_time_threshold = 1.0  # seconds
+        self.reentry_distance_threshold = 200  # pixels
         
         # Create output directories
         os.makedirs("logs", exist_ok=True)
@@ -122,6 +128,26 @@ class CarCounter:
     def _signal_handler(self, signum, frame):
         print("\nShutting down gracefully...")
         self.running = False
+
+    def find_matching_recent_exit(self, center_x, vehicle_type, current_time):
+        """Check if this entry matches a recent exit (likely same vehicle with new ID)"""
+        for exit_id, (exit_x, exit_time, exit_type) in list(self.recent_exits.items()):
+            # Check if exit was recent and vehicle type matches
+            time_diff = current_time - exit_time
+            distance_diff = abs(center_x - exit_x)
+            
+            if (time_diff <= self.reentry_time_threshold and 
+                distance_diff <= self.reentry_distance_threshold and
+                vehicle_type == exit_type):
+                # Found a match - remove from recent exits and return the original ID
+                del self.recent_exits[exit_id]
+                return exit_id
+        
+        return None
+
+    def get_original_id(self, track_id):
+        """Get the original track ID if this ID was remapped"""
+        return self.id_mapping.get(track_id, track_id)
 
     def log_message(self, message):
         timestamp = time.strftime("%H:%M:%S")
@@ -270,8 +296,22 @@ class CarCounter:
                     
                     # Log entry and record first position
                     if track_id not in self.ids_in_roi:
-                        self.first_seen[track_id] = (center_x, current_time)
-                        self.log_message(f"{vehicle_type} {track_id} entered ROI at X={center_x:.1f}")
+                        # Check if this is likely a re-entry of a recently exited vehicle (ID reassignment)
+                        original_id = self.find_matching_recent_exit(center_x, vehicle_type, current_time)
+                        
+                        if original_id is not None:
+                            # This is likely the same vehicle with a new ID
+                            self.id_mapping[track_id] = original_id
+                            # Copy tracking data from original ID
+                            if original_id in self.first_seen:
+                                self.first_seen[track_id] = self.first_seen[original_id]
+                            if original_id in self.vehicle_speeds:
+                                self.vehicle_speeds[track_id] = self.vehicle_speeds[original_id]
+                            self.log_message(f"{vehicle_type} {track_id} re-entered (merged with ID {original_id}) at X={center_x:.1f}")
+                        else:
+                            # New vehicle entry
+                            self.first_seen[track_id] = (center_x, current_time)
+                            self.log_message(f"{vehicle_type} {track_id} entered ROI at X={center_x:.1f}")
                     
                     # Always update last seen position
                     self.last_seen[track_id] = (center_x, current_time)
@@ -323,8 +363,16 @@ class CarCounter:
                             self.log_message(f"SAW {vehicle_type.upper()}: id={track_id}, speed={speed_mph:.1f} MPH, dir={direction}, distance={distance_meters:.1f}m, time={duration:.1f}s, total count={self.car_count}")
                             self.save_snapshot(frame, track_id, speed_mph, direction, duration, distance_meters)
                         else:
+                            # Insufficient data - might be a tracking glitch, add to recent exits
+                            if track_id in self.last_seen:
+                                exit_x, exit_time = self.last_seen[track_id]
+                                self.recent_exits[track_id] = (exit_x, exit_time, vehicle_type)
                             self.log_message(f"{vehicle_type} {track_id} exited ROI (insufficient data: {distance_meters:.1f}m in {duration:.1f}s)")
                     else:
+                        # No tracking data - add to recent exits
+                        if track_id in self.last_seen:
+                            exit_x, exit_time = self.last_seen[track_id]
+                            self.recent_exits[track_id] = (exit_x, exit_time, vehicle_type)
                         self.log_message(f"{vehicle_type} {track_id} exited ROI")
                     
                     # Cleanup tracking data
@@ -332,6 +380,15 @@ class CarCounter:
                     self.last_seen.pop(track_id, None)
             
             self.ids_in_roi = current_roi_ids
+            
+            # Clean up old recent exits (older than threshold)
+            current_cleanup_time = time.time()
+            expired_exits = [
+                exit_id for exit_id, (_, exit_time, _) in self.recent_exits.items()
+                if current_cleanup_time - exit_time > self.reentry_time_threshold
+            ]
+            for exit_id in expired_exits:
+                del self.recent_exits[exit_id]
 
             # Draw Total Count
             cv2.putText(frame, f"Count: {self.car_count}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
