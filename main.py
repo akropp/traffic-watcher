@@ -88,12 +88,15 @@ class CarCounter:
         # Use CAP_GSTREAMER backend if video source looks like a GStreamer pipeline
         if 'rtspsrc' in self.video_source or '!' in self.video_source:
             print("Detected GStreamer pipeline, using GStreamer backend")
+            # Set GStreamer debug level to see errors
+            os.environ['GST_DEBUG'] = '2'
             self.cap = cv2.VideoCapture(self.video_source, cv2.CAP_GSTREAMER)
         else:
             print("Using default backend (FFmpeg)")
             self.cap = cv2.VideoCapture(self.video_source)
         if not self.cap.isOpened():
             print(f"Error: Could not open video source {self.video_source}")
+            print("GStreamer error details should be printed above")
             return
 
         # Set buffer size to 1 to reduce latency and avoid H.264 decoding errors on old frames
