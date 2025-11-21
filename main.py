@@ -165,7 +165,7 @@ class CarCounter:
                     self.roi_y1 = int(self.height * ROI_TOP_LEFT_Y)
                     self.roi_x2 = int(self.width * ROI_BOTTOM_RIGHT_X)
                     self.roi_y2 = int(self.height * ROI_BOTTOM_RIGHT_Y)
-                    print(f"Downsampled to: {self.width}x{self.height} (scale={VIDEO_SCALE})")
+#                    print(f"Downsampled to: {self.width}x{self.height} (scale={VIDEO_SCALE})")
 
             # Crop frame to ROI for faster processing
             roi_frame = frame[self.roi_y1:self.roi_y2, self.roi_x1:self.roi_x2]
