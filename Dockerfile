@@ -23,11 +23,15 @@ COPY requirements.txt .
 
 # Install Python dependencies
 # Use CPU-only version of PyTorch for smaller size and better compatibility
-RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
 COPY main.py .
+
+# Pre-download YOLO model to avoid runtime download
+RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
 
 # Create directories for outputs
 RUN mkdir -p /app/logs /app/snapshots
