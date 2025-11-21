@@ -10,14 +10,13 @@ services:
       # Set to 'false' if you want to enable GUI mode (requires X11 forwarding)
       - HEADLESS=true
       
-      # GStreamer pipeline with VAAPI hardware decoding
+      # GStreamer pipeline with VA-API hardware decoding (newer headless-compatible plugin)
       # rtspsrc: RTSP source with TCP transport
       # rtph264depay: Depacketize RTP H.264
-      # h264parse: Parse H.264 stream
-      # vaapidecodebin: Auto VAAPI decoder (auto-selects device)
+      # vah264dec: Modern VA-API H.264 decoder (headless-compatible)
       # videoconvert: Convert to format OpenCV can read
       # appsink: Output for OpenCV VideoCapture
-      - VIDEO_SOURCE=rtspsrc location=rtsp://frigate.thekropp.com:8554/driveway protocols=tcp ! rtph264depay ! h264parse ! vaapidecodebin ! videoconvert ! appsink
+      - VIDEO_SOURCE=rtspsrc location=rtsp://frigate.thekropp.com:8554/driveway protocols=tcp ! rtph264depay ! vah264dec ! videoconvert ! appsink
       
       # Video downsampling (0.5 = half resolution, 1.0 = original)
       # Use 0.5 for faster CPU processing, 1.0 for better accuracy
@@ -25,6 +24,10 @@ services:
       
       # GStreamer VAAPI device
       - GST_VAAPI_DRM_DEVICE=/dev/dri/renderD128
+      
+      # Force VAAPI to use DRM backend (headless mode, no X11/Wayland)
+      - LIBVA_DRIVER_NAME=iHD
+      - LIBVA_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri
       
       # Database path
       - DB_PATH=/app/data/traffic_watcher.db
