@@ -85,6 +85,11 @@ class CarCounter:
         self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
+        # Apply video scaling to dimensions
+        if VIDEO_SCALE != 1.0:
+            self.width = int(self.width * VIDEO_SCALE)
+            self.height = int(self.height * VIDEO_SCALE)
+        
         # Calculate line positions in pixels
         self.line_left_x = int(self.width * LINE_LEFT_X_RATIO)
         self.line_right_x = int(self.width * LINE_RIGHT_X_RATIO)
@@ -154,19 +159,7 @@ class CarCounter:
             
             # Downsample frame if VIDEO_SCALE < 1.0
             if VIDEO_SCALE != 1.0:
-                frame = cv2.resize(frame, None, fx=VIDEO_SCALE, fy=VIDEO_SCALE, interpolation=cv2.INTER_LINEAR)
-                # Update dimensions for first scaled frame
-                if frame_count == 0:
-                    self.width = frame.shape[1]
-                    self.height = frame.shape[0]
-                    # Recalculate line positions and ROI for scaled dimensions
-                    self.line_left_x = int(self.width * LINE_LEFT_X_RATIO)
-                    self.line_right_x = int(self.width * LINE_RIGHT_X_RATIO)
-                    self.roi_x1 = int(self.width * ROI_TOP_LEFT_X)
-                    self.roi_y1 = int(self.height * ROI_TOP_LEFT_Y)
-                    self.roi_x2 = int(self.width * ROI_BOTTOM_RIGHT_X)
-                    self.roi_y2 = int(self.height * ROI_BOTTOM_RIGHT_Y)
-#                    print(f"Downsampled to: {self.width}x{self.height} (scale={VIDEO_SCALE})")
+                frame = cv2.resize(frame, (self.width, self.height), interpolation=cv2.INTER_LINEAR)
 
             # Crop frame to ROI for faster processing
             roi_frame = frame[self.roi_y1:self.roi_y2, self.roi_x1:self.roi_x2]
