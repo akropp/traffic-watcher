@@ -10,7 +10,7 @@ import sys
 # --- CONFIGURATION ---
 # RTSP Stream URL (Replace with your camera's URL)
 # Example: "rtsp://username:password@ip_address:port/stream"
-VIDEO_SOURCE = "rtsp://frigate.thekropp.com:8554/driveway" # Public test stream or local file path
+VIDEO_SOURCE = os.getenv('VIDEO_SOURCE', 'rtsp://frigate.thekropp.com:8554/driveway')
 
 # Real world distance between the two lines (in meters)
 DISTANCE_METERS = 10.0
@@ -20,6 +20,11 @@ MAX_CROSSING_DURATION = 10.0
 
 # Headless mode (no GUI window) - useful for Docker/server deployment
 HEADLESS = os.getenv('HEADLESS', 'true').lower() == 'true'
+
+# Video downsampling scale (0.5 = half resolution, 1.0 = original)
+# Lower values = faster processing but less accurate detection
+# Recommended: 0.5 for CPU, 1.0 for GPU
+VIDEO_SCALE = float(os.getenv('VIDEO_SCALE', '1.0'))
 
 # Lines positions (0-1 relative to frame height/width)
 # Vertical lines for left-to-right / right-to-left traffic
@@ -145,6 +150,22 @@ class CarCounter:
             
             # Reset retry count on success
             retry_count = 0
+            
+            # Downsample frame if VIDEO_SCALE < 1.0
+            if VIDEO_SCALE != 1.0:
+                frame = cv2.resize(frame, None, fx=VIDEO_SCALE, fy=VIDEO_SCALE, interpolation=cv2.INTER_LINEAR)
+                # Update dimensions for first scaled frame
+                if frame_count == 0:
+                    self.width = frame.shape[1]
+                    self.height = frame.shape[0]
+                    # Recalculate line positions and ROI for scaled dimensions
+                    self.line_left_x = int(self.width * LINE_LEFT_X_RATIO)
+                    self.line_right_x = int(self.width * LINE_RIGHT_X_RATIO)
+                    self.roi_x1 = int(self.width * ROI_TOP_LEFT_X)
+                    self.roi_y1 = int(self.height * ROI_TOP_LEFT_Y)
+                    self.roi_x2 = int(self.width * ROI_BOTTOM_RIGHT_X)
+                    self.roi_y2 = int(self.height * ROI_BOTTOM_RIGHT_Y)
+                    print(f"Downsampled to: {self.width}x{self.height} (scale={VIDEO_SCALE})")
 
             # Crop frame to ROI for faster processing
             roi_frame = frame[self.roi_y1:self.roi_y2, self.roi_x1:self.roi_x2]
