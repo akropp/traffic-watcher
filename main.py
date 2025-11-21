@@ -71,8 +71,8 @@ class CarCounter:
         self.running = True
         
         # Thresholds for merging rapid re-entries
-        self.reentry_time_threshold = 1.0  # seconds
-        self.reentry_distance_threshold = 200  # pixels
+        self.reentry_time_threshold = 1.5  # seconds
+        self.reentry_distance_threshold = 400  # pixels
         
         # Create output directories
         os.makedirs("logs", exist_ok=True)
@@ -209,7 +209,13 @@ class CarCounter:
         print("Attempting to reconnect to stream...")
         self.cap.release()
         time.sleep(2)
-        self.cap = cv2.VideoCapture(self.video_source)
+        
+        # Use same backend as initial connection
+        if 'rtspsrc' in self.video_source or '!' in self.video_source:
+            self.cap = cv2.VideoCapture(self.video_source, cv2.CAP_GSTREAMER)
+        else:
+            self.cap = cv2.VideoCapture(self.video_source)
+            
         if self.cap.isOpened():
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             print("Successfully reconnected to stream")
