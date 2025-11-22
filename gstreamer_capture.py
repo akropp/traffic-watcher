@@ -25,20 +25,7 @@ class GStreamerCapture:
         self.fps = 0.0
         
         # Create pipeline
-        print(f"[GStreamer] Creating pipeline...")
         self.pipeline = Gst.parse_launch(pipeline_str)
-        
-        # Debug: List all elements in the pipeline
-        print("[GStreamer] Pipeline elements:")
-        it = self.pipeline.iterate_elements()
-        while True:
-            result, element = it.next()
-            if result != Gst.IteratorResult.OK:
-                break
-            factory_name = element.get_factory().get_name() if element.get_factory() else "unknown"
-            element_name = element.get_name()
-            print(f"  - {element_name} ({factory_name})")
-        print()
         
         # Get appsink element
         self.appsink = self.pipeline.get_by_name('appsink0')
