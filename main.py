@@ -89,6 +89,11 @@ class CarCounter:
         self.headless = headless
         self.running = True
         
+        # Frame interval measurement (measured from actual frame delivery)
+        self.measured_frame_interval = None  # Will be calculated from actual timing
+        self.last_frame_time = None  # Wall clock time of last frame
+        self.frame_intervals = []  # Rolling window for averaging
+        
         # Create output directories
         os.makedirs("logs", exist_ok=True)
         os.makedirs("snapshots", exist_ok=True)
@@ -215,6 +220,18 @@ class CarCounter:
             
             success, frame = self.cap.read()
             if success and frame is not None:
+                # Measure actual frame interval (wall clock)
+                current_time = time.time()
+                if self.last_frame_time is not None:
+                    interval = current_time - self.last_frame_time
+                    # Keep rolling window of last 30 intervals for averaging
+                    self.frame_intervals.append(interval)
+                    if len(self.frame_intervals) > 30:
+                        self.frame_intervals.pop(0)
+                    # Update measured interval (average of recent intervals)
+                    if len(self.frame_intervals) >= 5:  # Need at least 5 samples
+                        self.measured_frame_interval = sum(self.frame_intervals) / len(self.frame_intervals)
+                self.last_frame_time = current_time
                 # Downsample frame if needed
                 if VIDEO_SCALE != 1.0:
                     frame = cv2.resize(frame, (self.width, self.height), interpolation=cv2.INTER_LINEAR)
@@ -387,7 +404,8 @@ class CarCounter:
         # Use frame-based timestamps instead of wall clock for accurate speed calculations
         # This accounts for frame drops and processing delays
         frame_timestamp = 0.0  # seconds from start
-        frame_interval = 1.0 / self.fps if self.fps > 0 else 0.167  # fallback to ~6fps
+        frame_interval = 1.0 / self.fps if self.fps > 0 else 0.167  # initial estimate, will be updated
+        interval_reported = False  # Track if we've logged the measured interval
         
         # Start background frame reader thread to prevent drops during inference
         self.reader_running = True
@@ -418,6 +436,20 @@ class CarCounter:
             
             # Reset retry count on success
             retry_count = 0
+            
+            # Use measured frame interval once available (more accurate than reported FPS)
+            if self.measured_frame_interval is not None and not interval_reported:
+                frame_interval = self.measured_frame_interval
+                measured_fps = 1.0 / frame_interval
+                reported_fps = self.fps
+                interval_reported = True
+                print(f"[Frame Timing] Measured FPS: {measured_fps:.2f} (interval: {frame_interval:.4f}s)")
+                print(f"[Frame Timing] Reported FPS: {reported_fps:.2f} (interval: {1.0/reported_fps:.4f}s)")
+                if abs(measured_fps - reported_fps) > 1.0:
+                    print(f"[Frame Timing] Using MEASURED interval for accurate speed calculations")
+            elif self.measured_frame_interval is not None:
+                # Continuously update to the measured interval (handles rate changes)
+                frame_interval = self.measured_frame_interval
             
             # Increment frame timestamp (accounts for actual frame delivery, not processing time)
             frame_timestamp += frame_interval
