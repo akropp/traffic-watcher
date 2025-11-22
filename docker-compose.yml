@@ -26,6 +26,9 @@ services:
       - LIBVA_DRIVER_NAME=iHD
       - LIBVA_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri
       
+      # Enable GStreamer debug to verify vah264dec is being used
+      - GST_DEBUG=3
+      
       # Database path
       - DB_PATH=/app/data/traffic_watcher.db
     
