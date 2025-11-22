@@ -89,10 +89,6 @@ class CarCounter:
         self.headless = headless
         self.running = True
         
-        # Thresholds for merging rapid re-entries
-        self.reentry_time_threshold = 1.5  # seconds
-        self.reentry_distance_threshold = 400  # pixels
-        
         # Create output directories
         os.makedirs("logs", exist_ok=True)
         os.makedirs("snapshots", exist_ok=True)
@@ -173,6 +169,11 @@ class CarCounter:
         self.roi_y1 = int(self.height * ROI_TOP_LEFT_Y)
         self.roi_x2 = int(self.width * ROI_BOTTOM_RIGHT_X)
         self.roi_y2 = int(self.height * ROI_BOTTOM_RIGHT_Y)
+        
+        # Thresholds for merging rapid re-entries (scaled with VIDEO_SCALE)
+        self.reentry_time_threshold = 1.5  # seconds
+        self.reentry_distance_threshold = int(400 * VIDEO_SCALE)  # pixels, scaled
+        self.stationary_distance_threshold = int(50 * VIDEO_SCALE)  # pixels, scaled
         
         print(f"Video Source: {self.width}x{self.height} @ {self.fps} FPS")
         if GSTREAMER_AVAILABLE and hasattr(self.cap, 'pipeline'):
@@ -541,10 +542,10 @@ class CarCounter:
                             distance_pixels = abs(last_x - first_x)
                             distance_meters = distance_pixels / self.pixels_per_meter
                             
-                            # Ignore tracking flicker - if vehicle hasn't moved >50 pixels (~2m) from entry in <5s, it's not really gone
+                            # Ignore tracking flicker - if vehicle hasn't moved >threshold pixels (~2m) from entry in <5s, it's not really gone
                             # This prevents spam from vehicles stopping/slow-moving with unstable tracking
                             # BUT: if duration is exactly 0, the vehicle was only seen for 1 frame - let it exit cleanly
-                            if distance_pixels < 50 and 0.1 < duration < 5.0:
+                            if distance_pixels < self.stationary_distance_threshold and 0.1 < duration < 5.0:
                                 # Tracking flicker - log once per vehicle ID to help debug
                                 if track_id not in getattr(self, '_flicker_logged', set()):
                                     if not hasattr(self, '_flicker_logged'):
