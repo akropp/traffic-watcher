@@ -8,7 +8,14 @@ import signal
 import sys
 from datetime import datetime
 import database
-from gstreamer_capture import GStreamerCapture
+
+# Try to import GStreamer capture (only available in Docker)
+try:
+    from gstreamer_capture import GStreamerCapture
+    GSTREAMER_AVAILABLE = True
+except ImportError:
+    GSTREAMER_AVAILABLE = False
+    print("GStreamer Python bindings not available - using OpenCV backend only")
 
 # --- CONFIGURATION ---
 # RTSP Stream URL (Replace with your camera's URL)
@@ -89,8 +96,8 @@ class CarCounter:
         # Open video
         print(f"Opening video source: {self.video_source[:80]}...")
         
-        # Use native GStreamer if pipeline is detected (for hardware decode)
-        if 'rtspsrc' in self.video_source or '!' in self.video_source:
+        # Use native GStreamer if pipeline is detected AND available (Docker only)
+        if GSTREAMER_AVAILABLE and ('rtspsrc' in self.video_source or '!' in self.video_source):
             print("Detected GStreamer pipeline, using native GStreamer bindings")
             print(f"Full pipeline: {self.video_source}")
             
@@ -106,8 +113,20 @@ class CarCounter:
                 else:
                     return
         else:
-            print("Using OpenCV FFmpeg backend")
-            self.cap = cv2.VideoCapture(self.video_source)
+            # OpenCV backend (local development or plain RTSP URL)
+            if 'rtspsrc' in self.video_source or '!' in self.video_source:
+                print("GStreamer not available, extracting RTSP URL from pipeline")
+                # Extract RTSP URL from pipeline
+                if 'location=' in self.video_source:
+                    rtsp_url = self.video_source.split('location=')[1].split(' ')[0]
+                    print(f"Using OpenCV with: {rtsp_url}")
+                    self.cap = cv2.VideoCapture(rtsp_url)
+                else:
+                    print("Could not extract RTSP URL from pipeline")
+                    return
+            else:
+                print("Using OpenCV FFmpeg backend")
+                self.cap = cv2.VideoCapture(self.video_source)
         if not self.cap.isOpened():
             print(f"Error: Could not open video source {self.video_source}")
             self.cap.release()
@@ -231,14 +250,23 @@ class CarCounter:
         time.sleep(2)
         
         # Use same backend as initial connection
-        if 'rtspsrc' in self.video_source or '!' in self.video_source:
+        if GSTREAMER_AVAILABLE and ('rtspsrc' in self.video_source or '!' in self.video_source):
             try:
                 self.cap = GStreamerCapture(self.video_source)
             except Exception as e:
                 print(f"Failed to recreate GStreamer pipeline: {e}")
                 return False
         else:
-            self.cap = cv2.VideoCapture(self.video_source)
+            # OpenCV backend
+            if 'rtspsrc' in self.video_source or '!' in self.video_source:
+                # Extract RTSP URL from pipeline
+                if 'location=' in self.video_source:
+                    rtsp_url = self.video_source.split('location=')[1].split(' ')[0]
+                    self.cap = cv2.VideoCapture(rtsp_url)
+                else:
+                    return False
+            else:
+                self.cap = cv2.VideoCapture(self.video_source)
             
         if self.cap.isOpened():
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
