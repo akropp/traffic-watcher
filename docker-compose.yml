@@ -7,6 +7,9 @@ services:
     restart: unless-stopped
     
     environment:
+      # Timezone - set to your local timezone (e.g., America/New_York, America/Chicago, America/Los_Angeles)
+      - TZ=America/New_York
+      
       # Set to 'false' if you want to enable GUI mode (requires X11 forwarding)
       - HEADLESS=true
       
@@ -57,7 +60,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.0'
+          cpus: '3.0'
           memory: 2G
         reservations:
           cpus: '1.0'
