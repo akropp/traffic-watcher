@@ -447,15 +447,36 @@ class CarCounter:
                 print(f"[Frame Timing] Measured FPS: {measured_fps:.2f} (interval: {self.measured_frame_interval:.4f}s)")
                 print(f"[Frame Timing] Reported FPS: {reported_fps:.2f} (interval: {1.0/reported_fps:.4f}s)")
                 
-                # Only use measured if reported FPS seems wrong (>30 fps for typical camera stream, or <1 fps)
-                # OR if measured and reported differ significantly (>3x difference)
-                if True or reported_fps > 30 or reported_fps < 1 or (abs(measured_fps - reported_fps) / reported_fps) > 3.0:
-                    frame_interval = self.measured_frame_interval
-                    print(f"[Frame Timing] Using MEASURED interval (reported FPS appears incorrect)")
-                else:
-                    # Use reported FPS - it's more reliable for RTSP streams
+                # For camera streams, expect 5.5-15 FPS range
+                # Values outside this are likely buffer drain (too high) or incorrect metadata (too low/high)
+                # Pick whichever value falls in the reasonable range, or closer to it
+                reasonable_min, reasonable_max = 5.5, 15.0
+                
+                reported_in_range = reasonable_min <= reported_fps <= reasonable_max
+                measured_in_range = reasonable_min <= measured_fps <= reasonable_max
+                
+                if reported_in_range and not measured_in_range:
+                    # Reported is reasonable, measured is not (Mac: measured=30)
                     frame_interval = 1.0 / reported_fps
-                    print(f"[Frame Timing] Using REPORTED FPS (more reliable for RTSP streams)")
+                    print(f"[Frame Timing] Using REPORTED FPS (in reasonable range, measured is buffer drain)")
+                elif measured_in_range and not reported_in_range:
+                    # Measured is reasonable, reported is not (Docker: reported=5 might be edge case)
+                    frame_interval = self.measured_frame_interval
+                    print(f"[Frame Timing] Using MEASURED interval (in reasonable range, reported is incorrect)")
+                elif reported_in_range and measured_in_range:
+                    # Both reasonable - prefer reported for RTSP streams
+                    frame_interval = 1.0 / reported_fps
+                    print(f"[Frame Timing] Using REPORTED FPS (both values reasonable)")
+                else:
+                    # Neither in range - pick whichever is closer to reasonable range
+                    reported_dist = min(abs(reported_fps - reasonable_min), abs(reported_fps - reasonable_max))
+                    measured_dist = min(abs(measured_fps - reasonable_min), abs(measured_fps - reasonable_max))
+                    if reported_dist < measured_dist:
+                        frame_interval = 1.0 / reported_fps
+                        print(f"[Frame Timing] Using REPORTED FPS (closer to expected range)")
+                    else:
+                        frame_interval = self.measured_frame_interval
+                        print(f"[Frame Timing] Using MEASURED interval (closer to expected range)")
             
             # Increment frame timestamp (accounts for actual frame delivery, not processing time)
             frame_timestamp += frame_interval
