@@ -24,6 +24,9 @@ MAX_CROSSING_DURATION = 10.0
 # Headless mode (no GUI window) - useful for Docker/server deployment
 HEADLESS = os.getenv('HEADLESS', 'true').lower() == 'true'
 
+# Skip YOLO inference (for testing decode-only CPU usage)
+SKIP_INFERENCE = os.getenv('SKIP_INFERENCE', 'false').lower() == 'true'
+
 # Video downsampling scale (0.5 = half resolution, 1.0 = original)
 # Lower values = faster processing but less accurate detection
 # Recommended: 0.5 for CPU, 1.0 for GPU
@@ -284,6 +287,13 @@ class CarCounter:
             # Crop frame to ROI for faster processing
             roi_frame = frame[self.roi_y1:self.roi_y2, self.roi_x1:self.roi_x2]
             if roi_frame.size == 0:
+                continue
+
+            # Skip inference if SKIP_INFERENCE mode is enabled (for testing)
+            if SKIP_INFERENCE:
+                frame_count += 1
+                if frame_count % 100 == 0:
+                    print(f"Decode-only mode: Processed {frame_count} frames (no inference)")
                 continue
 
             # Run YOLOv8 tracking on the CROP

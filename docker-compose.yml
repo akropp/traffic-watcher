@@ -10,6 +10,9 @@ services:
       # Set to 'false' if you want to enable GUI mode (requires X11 forwarding)
       - HEADLESS=true
       
+      # Skip YOLO inference (for testing decode-only CPU usage)
+      - SKIP_INFERENCE=true
+      
       # GStreamer pipeline with VA-API hardware decode
       # Using native GStreamer Python bindings (not OpenCV) for full control
       # appsink name=appsink0 is required for Python bindings to find it
