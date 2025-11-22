@@ -488,6 +488,13 @@ class CarCounter:
                         
                         # Log entry and record first position
                         if track_id not in self.ids_in_roi:
+                            # Don't merge if this track_id was already counted (prevents re-counting same vehicle)
+                            if track_id in self.counted_ids:
+                                # This ID was already counted - likely the same car re-entering or lingering
+                                # Don't track it again to avoid duplicate counts
+                                self.log_message(f"{vehicle_type} {track_id} re-entered ROI but was already counted, ignoring")
+                                continue
+                            
                             # Check if this is likely a re-entry of a recently exited vehicle (ID reassignment)
                             original_id = self.find_matching_recent_exit(center_x, vehicle_type, frame_timestamp)
                             
