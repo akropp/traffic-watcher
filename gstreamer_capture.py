@@ -86,6 +86,9 @@ class GStreamerCapture:
                 success, fps_num, fps_denom = structure.get_fraction('framerate')
                 if success:
                     self.fps = float(fps_num) / float(fps_denom)
+                    print(f"[GStreamer] Framerate: {fps_num}/{fps_denom} = {self.fps:.3f} FPS")
+                else:
+                    print("[GStreamer] Warning: Could not get framerate from caps")
     
     def _on_new_sample(self, appsink):
         """Callback when new frame is available"""
