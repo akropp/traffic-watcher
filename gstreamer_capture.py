@@ -30,7 +30,11 @@ class GStreamerCapture:
         
         # Debug: List all elements in the pipeline
         print("[GStreamer] Pipeline elements:")
-        for element in self.pipeline.iterate_elements():
+        it = self.pipeline.iterate_elements()
+        while True:
+            result, element = it.next()
+            if result != Gst.IteratorResult.OK:
+                break
             factory_name = element.get_factory().get_name() if element.get_factory() else "unknown"
             element_name = element.get_name()
             print(f"  - {element_name} ({factory_name})")
@@ -40,8 +44,12 @@ class GStreamerCapture:
         self.appsink = self.pipeline.get_by_name('appsink0')
         if not self.appsink:
             # Pipeline might auto-name it differently, find it
-            for element in self.pipeline.iterate_elements():
-                if element.get_factory().get_name() == 'appsink':
+            it = self.pipeline.iterate_elements()
+            while True:
+                result, element = it.next()
+                if result != Gst.IteratorResult.OK:
+                    break
+                if element.get_factory() and element.get_factory().get_name() == 'appsink':
                     self.appsink = element
                     break
         
