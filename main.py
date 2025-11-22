@@ -379,162 +379,163 @@ class CarCounter:
 
             # Check for motion before running expensive YOLO inference
             has_motion = self.detect_motion(frame)
+            frame_count += 1
             
             if not has_motion:
                 # No motion detected - skip inference
                 self.inference_skipped_count += 1
-                frame_count += 1
                 if frame_count % 100 == 0:
                     skip_percent = (self.inference_skipped_count / frame_count) * 100
                     print(f"Processed {frame_count} frames (skipped {skip_percent:.1f}% due to no motion)")
-                continue
             
-            # Motion detected - run inference
-            self.motion_detected_count += 1
+            else:
+                # Motion detected - run inference
+                self.motion_detected_count += 1
 
-            # Run YOLOv8 tracking on the CROP
-            # We don't need imgsz=1280 anymore because the crop is small and focused
-            results = self.model.track(roi_frame, persist=True, classes=VEHICLE_CLASSES, verbose=False, conf=0.25)
+                # Run YOLOv8 tracking on the CROP
+                # We don't need imgsz=1280 anymore because the crop is small and focused
+                results = self.model.track(roi_frame, persist=True, classes=VEHICLE_CLASSES, verbose=False, conf=0.25)
 
-            # Visualize ROI
-            cv2.rectangle(frame, (self.roi_x1, self.roi_y1), (self.roi_x2, self.roi_y2), (0, 0, 255), 1)
-            
-            # Visualize lines (Vertical)
-            cv2.line(frame, (self.line_left_x, self.roi_y1), (self.line_left_x, self.roi_y2), (0, 255, 255), 2)
-            cv2.line(frame, (self.line_right_x, self.roi_y1), (self.line_right_x, self.roi_y2), (0, 255, 0), 2)
-            
-            current_roi_ids = set()
-            
-            if results[0].boxes.id is not None:
-                boxes_xywh = results[0].boxes.xywh.cpu()
-                boxes_xyxy = results[0].boxes.xyxy.cpu()
-                track_ids = results[0].boxes.id.int().cpu().tolist()
-                classes = results[0].boxes.cls.int().cpu().tolist()
+                # Visualize ROI
+                cv2.rectangle(frame, (self.roi_x1, self.roi_y1), (self.roi_x2, self.roi_y2), (0, 0, 255), 1)
                 
-                for xywh, xyxy, track_id, class_id in zip(boxes_xywh, boxes_xyxy, track_ids, classes):
-                    # Adjust coordinates from ROI-relative to Frame-relative
-                    x_roi, y_roi, w, h = xywh
-                    x1_roi, y1_roi, x2_roi, y2_roi = xyxy
+                # Visualize lines (Vertical)
+                cv2.line(frame, (self.line_left_x, self.roi_y1), (self.line_left_x, self.roi_y2), (0, 255, 255), 2)
+                cv2.line(frame, (self.line_right_x, self.roi_y1), (self.line_right_x, self.roi_y2), (0, 255, 0), 2)
+                
+                current_roi_ids = set()
+                
+                if results[0].boxes.id is not None:
+                    boxes_xywh = results[0].boxes.xywh.cpu()
+                    boxes_xyxy = results[0].boxes.xyxy.cpu()
+                    track_ids = results[0].boxes.id.int().cpu().tolist()
+                    classes = results[0].boxes.cls.int().cpu().tolist()
                     
-                    x = x_roi + self.roi_x1
-                    y = y_roi + self.roi_y1
-                    
-                    x1 = x1_roi + self.roi_x1
-                    y1 = y1_roi + self.roi_y1
-                    x2 = x2_roi + self.roi_x1
-                    y2 = y2_roi + self.roi_y1
-                    
-                    center_y = float(y)
-                    center_x = float(x)
-                    
-                    # Check if center point is inside ROI (It should be, since we cropped, but keep safety)
-                    if not (self.roi_x1 <= center_x <= self.roi_x2 and self.roi_y1 <= center_y <= self.roi_y2):
-                        continue
-                    
-                    current_roi_ids.add(track_id)
-                    
-                    # Store vehicle type
-                    vehicle_type = CLASS_NAMES.get(class_id, "Vehicle")
-                    self.vehicle_types[track_id] = vehicle_type
-                    
-                    # Track first and last seen positions
-                    current_time = time.time()
-                    
-                    # Log entry and record first position
-                    if track_id not in self.ids_in_roi:
-                        # Check if this is likely a re-entry of a recently exited vehicle (ID reassignment)
-                        original_id = self.find_matching_recent_exit(center_x, vehicle_type, current_time)
+                    for xywh, xyxy, track_id, class_id in zip(boxes_xywh, boxes_xyxy, track_ids, classes):
+                        # Adjust coordinates from ROI-relative to Frame-relative
+                        x_roi, y_roi, w, h = xywh
+                        x1_roi, y1_roi, x2_roi, y2_roi = xyxy
                         
-                        if original_id is not None:
-                            # This is likely the same vehicle with a new ID
-                            self.id_mapping[track_id] = original_id
-                            # Copy tracking data from original ID
-                            if original_id in self.first_seen:
-                                self.first_seen[track_id] = self.first_seen[original_id]
-                            if original_id in self.vehicle_speeds:
-                                self.vehicle_speeds[track_id] = self.vehicle_speeds[original_id]
-                            self.log_message(f"{vehicle_type} {track_id} re-entered (merged with ID {original_id}) at X={center_x:.1f}")
-                        else:
-                            # New vehicle entry
-                            self.first_seen[track_id] = (center_x, current_time)
-                            self.log_message(f"{vehicle_type} {track_id} entered ROI at X={center_x:.1f}")
-                    
-                    # Always update last seen position
-                    self.last_seen[track_id] = (center_x, current_time)
-                    
-                    # Store track history for visualization
-                    track = self.track_history[track_id]
-                    track.append((center_x, center_y))
-                    if len(track) > 30:  # retain 30 frames
-                        track.pop(0)
-
-                    # Draw bounding box and ID
-                    cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (255, 0, 0), 2)
-                    
-                    # Draw label with type and speed if available
-                    vehicle_type = self.vehicle_types.get(track_id, "Vehicle")
-                    label = f"{vehicle_type} {track_id}"
-                    if track_id in self.vehicle_speeds:
-                        label += f" {self.vehicle_speeds[track_id]:.1f} MPH"
-                    
-                    cv2.putText(frame, label, (int(x1), int(y1) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
-            
-            # Check exits and calculate speed
-            for track_id in self.ids_in_roi:
-                if track_id not in current_roi_ids:
-                    vehicle_type = self.vehicle_types.get(track_id, "Vehicle")
-                    
-                    # Calculate speed if we have first and last positions
-                    if track_id in self.first_seen and track_id in self.last_seen:
-                        first_x, first_time = self.first_seen[track_id]
-                        last_x, last_time = self.last_seen[track_id]
+                        x = x_roi + self.roi_x1
+                        y = y_roi + self.roi_y1
                         
-                        duration = last_time - first_time
-                        distance_pixels = abs(last_x - first_x)
-                        distance_meters = distance_pixels / self.pixels_per_meter
+                        x1 = x1_roi + self.roi_x1
+                        y1 = y1_roi + self.roi_y1
+                        x2 = x2_roi + self.roi_x1
+                        y2 = y2_roi + self.roi_y1
                         
-                        # Only calculate if vehicle moved reasonable distance and time
-                        if duration > 0.5 and distance_meters > 1.0:
-                            speed_mps = distance_meters / duration
-                            speed_mph = speed_mps * 2.23694
+                        center_y = float(y)
+                        center_x = float(x)
+                        
+                        # Check if center point is inside ROI (It should be, since we cropped, but keep safety)
+                        if not (self.roi_x1 <= center_x <= self.roi_x2 and self.roi_y1 <= center_y <= self.roi_y2):
+                            continue
+                        
+                        current_roi_ids.add(track_id)
+                        
+                        # Store vehicle type
+                        vehicle_type = CLASS_NAMES.get(class_id, "Vehicle")
+                        self.vehicle_types[track_id] = vehicle_type
+                        
+                        # Track first and last seen positions
+                        current_time = time.time()
+                        
+                        # Log entry and record first position
+                        if track_id not in self.ids_in_roi:
+                            # Check if this is likely a re-entry of a recently exited vehicle (ID reassignment)
+                            original_id = self.find_matching_recent_exit(center_x, vehicle_type, current_time)
                             
-                            # Determine direction
-                            if last_x > first_x:
-                                direction = "northbound"
+                            if original_id is not None:
+                                # This is likely the same vehicle with a new ID
+                                self.id_mapping[track_id] = original_id
+                                # Copy tracking data from original ID
+                                if original_id in self.first_seen:
+                                    self.first_seen[track_id] = self.first_seen[original_id]
+                                if original_id in self.vehicle_speeds:
+                                    self.vehicle_speeds[track_id] = self.vehicle_speeds[original_id]
+                                self.log_message(f"{vehicle_type} {track_id} re-entered (merged with ID {original_id}) at X={center_x:.1f}")
                             else:
-                                direction = "southbound"
+                                # New vehicle entry
+                                self.first_seen[track_id] = (center_x, current_time)
+                                self.log_message(f"{vehicle_type} {track_id} entered ROI at X={center_x:.1f}")
+                        
+                        # Always update last seen position
+                        self.last_seen[track_id] = (center_x, current_time)
+                        
+                        # Store track history for visualization
+                        track = self.track_history[track_id]
+                        track.append((center_x, center_y))
+                        if len(track) > 30:  # retain 30 frames
+                            track.pop(0)
+
+                        # Draw bounding box and ID
+                        cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (255, 0, 0), 2)
+                        
+                        # Draw label with type and speed if available
+                        vehicle_type = self.vehicle_types.get(track_id, "Vehicle")
+                        label = f"{vehicle_type} {track_id}"
+                        if track_id in self.vehicle_speeds:
+                            label += f" {self.vehicle_speeds[track_id]:.1f} MPH"
+                        
+                        cv2.putText(frame, label, (int(x1), int(y1) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                
+                # Check exits and calculate speed
+                for track_id in self.ids_in_roi:
+                    if track_id not in current_roi_ids:
+                        vehicle_type = self.vehicle_types.get(track_id, "Vehicle")
+                        
+                        # Calculate speed if we have first and last positions
+                        if track_id in self.first_seen and track_id in self.last_seen:
+                            first_x, first_time = self.first_seen[track_id]
+                            last_x, last_time = self.last_seen[track_id]
                             
-                            self.vehicle_speeds[track_id] = speed_mph
-                            self.car_count += 1
-                            self.log_message(f"SAW {vehicle_type.upper()}: id={track_id}, speed={speed_mph:.1f} MPH, dir={direction}, distance={distance_meters:.1f}m, time={duration:.1f}s, total count={self.car_count}")
-                            self.save_snapshot(frame, track_id, speed_mph, direction, duration, distance_meters)
+                            duration = last_time - first_time
+                            distance_pixels = abs(last_x - first_x)
+                            distance_meters = distance_pixels / self.pixels_per_meter
+                            
+                            # Only calculate if vehicle moved reasonable distance and time
+                            # Low thresholds to catch fast-moving vehicles (0.2s = ~5fps, 0.5m = ~2ft)
+                            if duration > 0.2 and distance_meters > 0.5:
+                                speed_mps = distance_meters / duration
+                                speed_mph = speed_mps * 2.23694
+                                
+                                # Determine direction
+                                if last_x > first_x:
+                                    direction = "northbound"
+                                else:
+                                    direction = "southbound"
+                                
+                                self.vehicle_speeds[track_id] = speed_mph
+                                self.car_count += 1
+                                self.log_message(f"SAW {vehicle_type.upper()}: id={track_id}, speed={speed_mph:.1f} MPH, dir={direction}, distance={distance_meters:.1f}m, time={duration:.1f}s, total count={self.car_count}")
+                                self.save_snapshot(frame, track_id, speed_mph, direction, duration, distance_meters)
+                            else:
+                                # Insufficient data - might be a tracking glitch, add to recent exits
+                                if track_id in self.last_seen:
+                                    exit_x, exit_time = self.last_seen[track_id]
+                                    self.recent_exits[track_id] = (exit_x, exit_time, vehicle_type)
+                                self.log_message(f"{vehicle_type} {track_id} exited ROI (insufficient data: {distance_meters:.1f}m in {duration:.1f}s)")
                         else:
-                            # Insufficient data - might be a tracking glitch, add to recent exits
+                            # No tracking data - add to recent exits
                             if track_id in self.last_seen:
                                 exit_x, exit_time = self.last_seen[track_id]
                                 self.recent_exits[track_id] = (exit_x, exit_time, vehicle_type)
-                            self.log_message(f"{vehicle_type} {track_id} exited ROI (insufficient data: {distance_meters:.1f}m in {duration:.1f}s)")
-                    else:
-                        # No tracking data - add to recent exits
-                        if track_id in self.last_seen:
-                            exit_x, exit_time = self.last_seen[track_id]
-                            self.recent_exits[track_id] = (exit_x, exit_time, vehicle_type)
-                        self.log_message(f"{vehicle_type} {track_id} exited ROI")
-                    
-                    # Cleanup tracking data
-                    self.first_seen.pop(track_id, None)
-                    self.last_seen.pop(track_id, None)
-            
-            self.ids_in_roi = current_roi_ids
-            
-            # Clean up old recent exits (older than threshold)
-            current_cleanup_time = time.time()
-            expired_exits = [
-                exit_id for exit_id, (_, exit_time, _) in self.recent_exits.items()
-                if current_cleanup_time - exit_time > self.reentry_time_threshold
-            ]
-            for exit_id in expired_exits:
-                del self.recent_exits[exit_id]
+                            self.log_message(f"{vehicle_type} {track_id} exited ROI")
+                        
+                        # Cleanup tracking data
+                        self.first_seen.pop(track_id, None)
+                        self.last_seen.pop(track_id, None)
+                
+                self.ids_in_roi = current_roi_ids
+                
+                # Clean up old recent exits (older than threshold)
+                current_cleanup_time = time.time()
+                expired_exits = [
+                    exit_id for exit_id, (_, exit_time, _) in self.recent_exits.items()
+                    if current_cleanup_time - exit_time > self.reentry_time_threshold
+                ]
+                for exit_id in expired_exits:
+                    del self.recent_exits[exit_id]
 
             # Draw Total Count
             cv2.putText(frame, f"Count: {self.car_count}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
