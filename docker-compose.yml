@@ -26,7 +26,7 @@ services:
       
       # Video downsampling (0.5 = half resolution, 1.0 = original)
       # Use 0.5 for faster CPU processing, 1.0 for better accuracy
-      - VIDEO_SCALE=0.5
+      - VIDEO_SCALE=0.75
       
       # GStreamer VAAPI device
       - GST_VAAPI_DRM_DEVICE=/dev/dri/renderD128

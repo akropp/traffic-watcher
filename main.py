@@ -51,10 +51,10 @@ LINE_RIGHT_X_RATIO = 0.77
 
 # Region of Interest (ROI) for detection (0-1 relative to frame dimensions)
 # Top-Left (x, y) and Bottom-Right (x, y)
-ROI_TOP_LEFT_X = 0.5
-ROI_TOP_LEFT_Y = 0.0
+ROI_TOP_LEFT_X = 0.52
+ROI_TOP_LEFT_Y = 0.01
 ROI_BOTTOM_RIGHT_X = 0.86
-ROI_BOTTOM_RIGHT_Y = 0.27 # Top half of the frame
+ROI_BOTTOM_RIGHT_Y = 0.26 # Top half of the frame
 
 # Vehicle classes to detect (COCO dataset class IDs)
 # 2: car, 3: motorcycle, 5: bus, 7: truck
@@ -395,13 +395,6 @@ class CarCounter:
                 # Run YOLOv8 tracking on the CROP
                 # We don't need imgsz=1280 anymore because the crop is small and focused
                 results = self.model.track(roi_frame, persist=True, classes=VEHICLE_CLASSES, verbose=False, conf=0.25)
-
-                # Visualize ROI
-                cv2.rectangle(frame, (self.roi_x1, self.roi_y1), (self.roi_x2, self.roi_y2), (0, 0, 255), 1)
-                
-                # Visualize lines (Vertical)
-                cv2.line(frame, (self.line_left_x, self.roi_y1), (self.line_left_x, self.roi_y2), (0, 255, 255), 2)
-                cv2.line(frame, (self.line_right_x, self.roi_y1), (self.line_right_x, self.roi_y2), (0, 255, 0), 2)
                 
                 current_roi_ids = set()
                 
@@ -536,6 +529,13 @@ class CarCounter:
                 ]
                 for exit_id in expired_exits:
                     del self.recent_exits[exit_id]
+
+            # Visualize ROI
+            cv2.rectangle(frame, (self.roi_x1, self.roi_y1), (self.roi_x2, self.roi_y2), (0, 0, 255), 1)
+            
+            # Visualize lines (Vertical)
+            cv2.line(frame, (self.line_left_x, self.roi_y1), (self.line_left_x, self.roi_y2), (0, 255, 255), 2)
+            cv2.line(frame, (self.line_right_x, self.roi_y1), (self.line_right_x, self.roi_y2), (0, 255, 0), 2)
 
             # Draw Total Count
             cv2.putText(frame, f"Count: {self.car_count}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
