@@ -548,9 +548,12 @@ class CarCounter:
                     break
             else:
                 # In headless mode, just keep processing
-                frame_count += 1
                 if frame_count % 100 == 0:
-                    print(f"Processed {frame_count} frames, detected {self.car_count} vehicles")
+                    if MOTION_DETECTION:
+                        skip_percent = (self.inference_skipped_count / frame_count) * 100
+                        print(f"Processed {frame_count} frames, detected {self.car_count} vehicles (skipped {skip_percent:.1f}% due to no motion)")
+                    else:
+                        print(f"Processed {frame_count} frames, detected {self.car_count} vehicles")
         
         self.cap.release()
         if not self.headless:
