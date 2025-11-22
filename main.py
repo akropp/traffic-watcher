@@ -192,7 +192,7 @@ class CarCounter:
         self.inference_skipped_count = 0
         
         # Frame queue for async reading (prevents frame drops during inference)
-        self.frame_queue = queue.Queue(maxsize=10)  # Buffer up to 10 frames
+        self.frame_queue = queue.Queue(maxsize=20)  # Buffer up to 20 frames (4 seconds)
         self.frame_reader_thread = None
         self.reader_running = False
         
