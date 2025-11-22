@@ -89,10 +89,8 @@ class CarCounter:
         self.headless = headless
         self.running = True
         
-        # Frame interval measurement (measured from actual enqueue rate)
-        self.measured_frame_interval = None  # Will be calculated from actual timing
-        self.last_frame_time = None  # Wall clock time of last frame
-        self.frame_intervals = []  # Rolling window for averaging
+        # Frame timestamp tracking
+        self.last_frame_capture_time = None  # Capture timestamp of last processed frame
         
         # Create output directories
         os.makedirs("logs", exist_ok=True)
@@ -220,33 +218,20 @@ class CarCounter:
             
             success, frame = self.cap.read()
             if success and frame is not None:
-                # Measure wall clock interval between frames being enqueued
-                # This is the actual processing rate, even if frames are duplicates
-                current_time = time.time()
-                if self.last_frame_time is not None:
-                    interval = current_time - self.last_frame_time
-                    # Keep rolling window of last 30 intervals for averaging
-                    self.frame_intervals.append(interval)
-                    if len(self.frame_intervals) > 30:
-                        self.frame_intervals.pop(0)
-                    # Only set measured interval after collecting enough samples (10 frames minimum)
-                    # This ensures we have a stable average before using it for calculations
-                    if len(self.frame_intervals) >= 10:
-                        self.measured_frame_interval = sum(self.frame_intervals) / len(self.frame_intervals)
-                        
-                self.last_frame_time = current_time
+                # Capture wall clock timestamp when frame is read
+                capture_time = time.time()
                 # Downsample frame if needed
                 if VIDEO_SCALE != 1.0:
                     frame = cv2.resize(frame, (self.width, self.height), interpolation=cv2.INTER_LINEAR)
                 
-                # Try to add to queue (non-blocking)
+                # Try to add frame and its capture timestamp to queue (non-blocking)
                 try:
-                    self.frame_queue.put(frame, block=False)
+                    self.frame_queue.put((frame, capture_time), block=False)
                 except queue.Full:
                     # Queue full, drop oldest frame and try again
                     try:
                         self.frame_queue.get_nowait()
-                        self.frame_queue.put(frame, block=False)
+                        self.frame_queue.put((frame, capture_time), block=False)
                     except (queue.Empty, queue.Full):
                         pass
             else:
@@ -427,9 +412,9 @@ class CarCounter:
                     continue
                 reconnect_attempts = 0
             
-            # Read frame from queue (already downsampled by reader thread)
+            # Read frame and capture timestamp from queue
             try:
-                frame = self.frame_queue.get(timeout=1.0)
+                frame, capture_time = self.frame_queue.get(timeout=1.0)
             except queue.Empty:
                 retry_count += 1
                 if retry_count > 10:
@@ -440,17 +425,23 @@ class CarCounter:
             # Reset retry count on success
             retry_count = 0
             
-            # Use measured frame interval once available - this is the actual processing rate
-            if self.measured_frame_interval is not None and not interval_reported:
-                measured_fps = 1.0 / self.measured_frame_interval
-                reported_fps = self.fps
-                interval_reported = True
-                frame_interval = self.measured_frame_interval
-                print(f"[Frame Timing] Measured FPS: {measured_fps:.2f} (interval: {self.measured_frame_interval:.4f}s)")
-                print(f"[Frame Timing] Reported FPS: {reported_fps:.2f} (interval: {1.0/reported_fps:.4f}s)")
-                print(f"[Frame Timing] Using MEASURED interval for all timing calculations")
+            # Calculate actual interval from capture timestamps
+            if self.last_frame_capture_time is not None:
+                frame_interval = capture_time - self.last_frame_capture_time
+                # Log FPS once for diagnostics
+                if not interval_reported:
+                    interval_reported = True
+                    actual_fps = 1.0 / frame_interval if frame_interval > 0 else 0
+                    print(f"[Frame Timing] Actual frame capture interval: {frame_interval:.4f}s ({actual_fps:.2f} FPS)")
+                    print(f"[Frame Timing] Reported stream FPS: {self.fps:.2f} FPS")
+                    print(f"[Frame Timing] Using ACTUAL capture timestamps for accurate timing")
+            else:
+                # First frame - use reported FPS as initial estimate
+                frame_interval = 1.0 / self.fps if self.fps > 0 else 0.167
             
-            # Increment frame timestamp (accounts for actual frame delivery, not processing time)
+            self.last_frame_capture_time = capture_time
+            
+            # Increment frame timestamp by actual interval between captures
             frame_timestamp += frame_interval
 
             # Crop frame to ROI for faster processing
@@ -590,12 +581,16 @@ class CarCounter:
                             # This prevents spam from vehicles stopping/slow-moving with unstable tracking
                             # BUT: if duration is exactly 0, the vehicle was only seen for 1 frame - let it exit cleanly
                             if distance_pixels < self.stationary_distance_threshold and 0.1 < duration < 5.0:
-                                # Tracking flicker - log once per vehicle ID to help debug
+                                # Tracking flicker - add to recent_exits so it can be merged if it re-appears with new ID
                                 if track_id not in getattr(self, '_flicker_logged', set()):
                                     if not hasattr(self, '_flicker_logged'):
                                         self._flicker_logged = set()
                                     self._flicker_logged.add(track_id)
-                                    self.log_message(f"{vehicle_type} {track_id} appears stationary (moved {distance_meters:.1f}m in {duration:.1f}s), continuing to track")
+                                    self.log_message(f"{vehicle_type} {track_id} appears stationary (moved {distance_meters:.1f}m in {duration:.1f}s), adding to merge pool")
+                                # Add to recent exits so it can be merged with re-entries
+                                if track_id in self.last_seen:
+                                    exit_x, exit_time = self.last_seen[track_id]
+                                    self.recent_exits[track_id] = (exit_x, exit_time, vehicle_type)
                                 continue
                             
                             # Only calculate if vehicle moved reasonable distance OR time
