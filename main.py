@@ -187,7 +187,7 @@ class CarCounter:
         
         # Motion detection state
         self.prev_gray = None
-        self.last_motion_time = time.time()  # Time-based instead of frame-based
+        self.last_motion_time = 0.0  # Frame timestamp of last motion
         self.motion_detected_count = 0
         self.inference_skipped_count = 0
         
@@ -234,14 +234,14 @@ class CarCounter:
         
         print("[Frame Reader] Thread stopped")
     
-    def detect_motion(self, frame):
+    def detect_motion(self, frame, frame_timestamp):
         """Detect motion in ROI using frame differencing"""
         if not MOTION_DETECTION:
             return True  # Always run inference if motion detection disabled
         
         # Always run inference if we're actively tracking vehicles
         if len(self.ids_in_roi) > 0:
-            self.last_motion_time = time.time()  # Reset timer while tracking
+            self.last_motion_time = frame_timestamp  # Reset timer while tracking
             return True
         
         # Extract ROI
@@ -269,12 +269,12 @@ class CarCounter:
         
         # Motion detected if enough pixels changed
         if changed_pixels > MOTION_THRESHOLD:
-            self.last_motion_time = time.time()
+            self.last_motion_time = frame_timestamp
             return True
         
         # Continue running inference for 10 seconds after motion stops
-        # Time-based grace period works regardless of FPS variations
-        time_since_motion = time.time() - self.last_motion_time
+        # Frame-based grace period ensures consistent behavior regardless of processing speed
+        time_since_motion = frame_timestamp - self.last_motion_time
         if time_since_motion < 10.0:  # 10 second grace period
             return True
         
@@ -431,7 +431,7 @@ class CarCounter:
                 continue
 
             # Check for motion before running expensive YOLO inference
-            has_motion = self.detect_motion(frame)
+            has_motion = self.detect_motion(frame, frame_timestamp)
             frame_count += 1
             
             if not has_motion:
