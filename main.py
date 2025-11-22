@@ -89,7 +89,7 @@ class CarCounter:
         self.headless = headless
         self.running = True
         
-        # Frame interval measurement (measured from actual frame delivery)
+        # Frame interval measurement (measured from actual enqueue rate)
         self.measured_frame_interval = None  # Will be calculated from actual timing
         self.last_frame_time = None  # Wall clock time of last frame
         self.frame_intervals = []  # Rolling window for averaging
@@ -220,7 +220,8 @@ class CarCounter:
             
             success, frame = self.cap.read()
             if success and frame is not None:
-                # Measure wall clock interval between successive frame reads
+                # Measure wall clock interval between frames being enqueued
+                # This is the actual processing rate, even if frames are duplicates
                 current_time = time.time()
                 if self.last_frame_time is not None:
                     interval = current_time - self.last_frame_time
@@ -407,7 +408,7 @@ class CarCounter:
         # This accounts for frame drops and processing delays
         frame_timestamp = 0.0  # seconds from start
         frame_interval = 1.0 / self.fps if self.fps > 0 else 0.167  # initial estimate, will be updated
-        interval_reported = False  # Track if we've logged the measured interval
+        interval_reported = False  # Track if we've logged the interval choice
         
         # Start background frame reader thread to prevent drops during inference
         self.reader_running = True
@@ -439,44 +440,15 @@ class CarCounter:
             # Reset retry count on success
             retry_count = 0
             
-            # Use measured frame interval if available and significantly different from reported
+            # Use measured frame interval once available - this is the actual processing rate
             if self.measured_frame_interval is not None and not interval_reported:
                 measured_fps = 1.0 / self.measured_frame_interval
                 reported_fps = self.fps
                 interval_reported = True
+                frame_interval = self.measured_frame_interval
                 print(f"[Frame Timing] Measured FPS: {measured_fps:.2f} (interval: {self.measured_frame_interval:.4f}s)")
                 print(f"[Frame Timing] Reported FPS: {reported_fps:.2f} (interval: {1.0/reported_fps:.4f}s)")
-                
-                # For camera streams, expect 5.5-15 FPS range
-                # Values outside this are likely buffer drain (too high) or incorrect metadata (too low/high)
-                # Pick whichever value falls in the reasonable range, or closer to it
-                reasonable_min, reasonable_max = 5.5, 15.0
-                
-                reported_in_range = reasonable_min <= reported_fps <= reasonable_max
-                measured_in_range = reasonable_min <= measured_fps <= reasonable_max
-                
-                if reported_in_range and not measured_in_range:
-                    # Reported is reasonable, measured is not (Mac: measured=30)
-                    frame_interval = 1.0 / reported_fps
-                    print(f"[Frame Timing] Using REPORTED FPS (in reasonable range, measured is buffer drain)")
-                elif measured_in_range and not reported_in_range:
-                    # Measured is reasonable, reported is not (Docker: reported=5 might be edge case)
-                    frame_interval = self.measured_frame_interval
-                    print(f"[Frame Timing] Using MEASURED interval (in reasonable range, reported is incorrect)")
-                elif reported_in_range and measured_in_range:
-                    # Both reasonable - prefer reported for RTSP streams
-                    frame_interval = 1.0 / reported_fps
-                    print(f"[Frame Timing] Using REPORTED FPS (both values reasonable)")
-                else:
-                    # Neither in range - pick whichever is closer to reasonable range
-                    reported_dist = min(abs(reported_fps - reasonable_min), abs(reported_fps - reasonable_max))
-                    measured_dist = min(abs(measured_fps - reasonable_min), abs(measured_fps - reasonable_max))
-                    if reported_dist < measured_dist:
-                        frame_interval = 1.0 / reported_fps
-                        print(f"[Frame Timing] Using REPORTED FPS (closer to expected range)")
-                    else:
-                        frame_interval = self.measured_frame_interval
-                        print(f"[Frame Timing] Using MEASURED interval (closer to expected range)")
+                print(f"[Frame Timing] Using MEASURED interval for all timing calculations")
             
             # Increment frame timestamp (accounts for actual frame delivery, not processing time)
             frame_timestamp += frame_interval
