@@ -173,6 +173,8 @@ class CarCounter:
         self.roi_y2 = int(self.height * ROI_BOTTOM_RIGHT_Y)
         
         print(f"Video Source: {self.width}x{self.height} @ {self.fps} FPS")
+        if GSTREAMER_AVAILABLE and hasattr(self.cap, 'pipeline'):
+            print(f"  (Note: GStreamer reports stream metadata FPS, actual delivery may vary)")
         print(f"Speed Measurement Lines at X={self.line_left_x} and X={self.line_right_x}")
         print(f"ROI: ({self.roi_x1}, {self.roi_y1}) to ({self.roi_x2}, {self.roi_y2})")
         print(f"Mode: {'Headless' if self.headless else 'GUI'}")
@@ -181,7 +183,7 @@ class CarCounter:
         
         # Motion detection state
         self.prev_gray = None
-        self.frames_since_motion = 0
+        self.last_motion_time = time.time()  # Time-based instead of frame-based
         self.motion_detected_count = 0
         self.inference_skipped_count = 0
         
@@ -200,7 +202,7 @@ class CarCounter:
         
         # Always run inference if we're actively tracking vehicles
         if len(self.ids_in_roi) > 0:
-            self.frames_since_motion = 0  # Reset counter while tracking
+            self.last_motion_time = time.time()  # Reset timer while tracking
             return True
         
         # Extract ROI
@@ -228,13 +230,13 @@ class CarCounter:
         
         # Motion detected if enough pixels changed
         if changed_pixels > MOTION_THRESHOLD:
-            self.frames_since_motion = 0
+            self.last_motion_time = time.time()
             return True
         
-        # Continue running inference longer after motion stops (10 seconds)
-        # Extended grace period to ensure slow-moving vehicles are fully tracked
-        self.frames_since_motion += 1
-        if self.frames_since_motion < 60:  # ~10 seconds at 6fps, ~12 seconds at 5fps
+        # Continue running inference for 10 seconds after motion stops
+        # Time-based grace period works regardless of FPS variations
+        time_since_motion = time.time() - self.last_motion_time
+        if time_since_motion < 10.0:  # 10 second grace period
             return True
         
         return False
@@ -450,6 +452,9 @@ class CarCounter:
                                 # Copy tracking data from original ID
                                 if original_id in self.first_seen:
                                     self.first_seen[track_id] = self.first_seen[original_id]
+                                else:
+                                    # Original didn't have first_seen (shouldn't happen now, but safety)
+                                    self.first_seen[track_id] = (center_x, current_time)
                                 if original_id in self.vehicle_speeds:
                                     self.vehicle_speeds[track_id] = self.vehicle_speeds[original_id]
                                 self.log_message(f"{vehicle_type} {track_id} re-entered (merged with ID {original_id}) at X={center_x:.1f}")
@@ -534,9 +539,8 @@ class CarCounter:
                                 self.recent_exits[track_id] = (exit_x, exit_time, vehicle_type)
                             self.log_message(f"{vehicle_type} {track_id} exited ROI")
                         
-                        # Cleanup tracking data
-                        self.first_seen.pop(track_id, None)
-                        self.last_seen.pop(track_id, None)
+                        # DON'T cleanup tracking data yet - keep it for re-entry merging
+                        # It will be cleaned up with recent_exits after the reentry window expires
                 
                 self.ids_in_roi = current_roi_ids
                 
@@ -548,6 +552,10 @@ class CarCounter:
                 ]
                 for exit_id in expired_exits:
                     del self.recent_exits[exit_id]
+                    # Also clean up tracking data for this expired exit
+                    self.first_seen.pop(exit_id, None)
+                    self.last_seen.pop(exit_id, None)
+                    self.vehicle_speeds.pop(exit_id, None)
 
             # Visualize ROI
             cv2.rectangle(frame, (self.roi_x1, self.roi_y1), (self.roi_x2, self.roi_y2), (0, 0, 255), 1)
