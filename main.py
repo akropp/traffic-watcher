@@ -8,6 +8,8 @@ import signal
 import sys
 from datetime import datetime
 import database
+import threading
+import queue
 
 # Try to import GStreamer capture (only available in Docker)
 try:
@@ -175,6 +177,7 @@ class CarCounter:
         print(f"Video Source: {self.width}x{self.height} @ {self.fps} FPS")
         if GSTREAMER_AVAILABLE and hasattr(self.cap, 'pipeline'):
             print(f"  (Note: GStreamer reports stream metadata FPS, actual delivery may vary)")
+        print(f"  Using frame interval: {1.0/self.fps:.4f}s ({self.fps:.2f} FPS) for speed calculations")
         print(f"Speed Measurement Lines at X={self.line_left_x} and X={self.line_right_x}")
         print(f"ROI: ({self.roi_x1}, {self.roi_y1}) to ({self.roi_x2}, {self.roi_y2})")
         print(f"Mode: {'Headless' if self.headless else 'GUI'}")
@@ -187,6 +190,11 @@ class CarCounter:
         self.motion_detected_count = 0
         self.inference_skipped_count = 0
         
+        # Frame queue for async reading (prevents frame drops during inference)
+        self.frame_queue = queue.Queue(maxsize=10)  # Buffer up to 10 frames
+        self.frame_reader_thread = None
+        self.reader_running = False
+        
         # Setup signal handler for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -194,6 +202,36 @@ class CarCounter:
     def _signal_handler(self, signum, frame):
         print("\nShutting down gracefully...")
         self.running = False
+        self.reader_running = False
+    
+    def _frame_reader_loop(self):
+        """Background thread that continuously reads frames to prevent drops"""
+        print("[Frame Reader] Thread started")
+        while self.reader_running:
+            if not self.cap.isOpened():
+                time.sleep(0.1)
+                continue
+            
+            success, frame = self.cap.read()
+            if success and frame is not None:
+                # Downsample frame if needed
+                if VIDEO_SCALE != 1.0:
+                    frame = cv2.resize(frame, (self.width, self.height), interpolation=cv2.INTER_LINEAR)
+                
+                # Try to add to queue (non-blocking)
+                try:
+                    self.frame_queue.put(frame, block=False)
+                except queue.Full:
+                    # Queue full, drop oldest frame and try again
+                    try:
+                        self.frame_queue.get_nowait()
+                        self.frame_queue.put(frame, block=False)
+                    except (queue.Empty, queue.Full):
+                        pass
+            else:
+                time.sleep(0.01)  # Brief pause on read failure
+        
+        print("[Frame Reader] Thread stopped")
     
     def detect_motion(self, frame):
         """Detect motion in ROI using frame differencing"""
@@ -341,6 +379,17 @@ class CarCounter:
         reconnect_attempts = 0
         frame_count = 0
         
+        # Use frame-based timestamps instead of wall clock for accurate speed calculations
+        # This accounts for frame drops and processing delays
+        frame_timestamp = 0.0  # seconds from start
+        frame_interval = 1.0 / self.fps if self.fps > 0 else 0.167  # fallback to ~6fps
+        
+        # Start background frame reader thread to prevent drops during inference
+        self.reader_running = True
+        self.frame_reader_thread = threading.Thread(target=self._frame_reader_loop, daemon=True)
+        self.frame_reader_thread.start()
+        print("[Main] Frame reader thread started, reading from queue...")
+        
         while self.running:
             if not self.cap.isOpened():
                 if not self.reconnect_stream():
@@ -352,26 +401,21 @@ class CarCounter:
                     continue
                 reconnect_attempts = 0
             
-            success, frame = self.cap.read()
-            
-            if not success or frame is None:
+            # Read frame from queue (already downsampled by reader thread)
+            try:
+                frame = self.frame_queue.get(timeout=1.0)
+            except queue.Empty:
                 retry_count += 1
-                print(f"Warning: Failed to read frame (Attempt {retry_count}/10)")
                 if retry_count > 10:
-                    print("Stream appears disconnected. Will attempt reconnection...")
+                    print("Warning: No frames received for 10 seconds, stream may be disconnected")
                     retry_count = 0
-                    self.cap.release()
-                    time.sleep(1)
-                    continue
-                time.sleep(0.5)
                 continue
             
             # Reset retry count on success
             retry_count = 0
             
-            # Downsample frame if VIDEO_SCALE < 1.0
-            if VIDEO_SCALE != 1.0:
-                frame = cv2.resize(frame, (self.width, self.height), interpolation=cv2.INTER_LINEAR)
+            # Increment frame timestamp (accounts for actual frame delivery, not processing time)
+            frame_timestamp += frame_interval
 
             # Crop frame to ROI for faster processing
             roi_frame = frame[self.roi_y1:self.roi_y2, self.roi_x1:self.roi_x2]
@@ -394,7 +438,8 @@ class CarCounter:
                 self.inference_skipped_count += 1
                 if frame_count % 100 == 0:
                     skip_percent = (self.inference_skipped_count / frame_count) * 100
-                    print(f"Processed {frame_count} frames (skipped {skip_percent:.1f}% due to no motion)")
+                    queue_size = self.frame_queue.qsize()
+                    print(f"Processed {frame_count} frames (skipped {skip_percent:.1f}% due to no motion) [queue: {queue_size}/10]")
             
             else:
                 # Motion detected - run inference
@@ -438,13 +483,12 @@ class CarCounter:
                         vehicle_type = CLASS_NAMES.get(class_id, "Vehicle")
                         self.vehicle_types[track_id] = vehicle_type
                         
-                        # Track first and last seen positions
-                        current_time = time.time()
+                        # Track first and last seen positions (using frame timestamps, not wall clock)
                         
                         # Log entry and record first position
                         if track_id not in self.ids_in_roi:
                             # Check if this is likely a re-entry of a recently exited vehicle (ID reassignment)
-                            original_id = self.find_matching_recent_exit(center_x, vehicle_type, current_time)
+                            original_id = self.find_matching_recent_exit(center_x, vehicle_type, frame_timestamp)
                             
                             if original_id is not None:
                                 # This is likely the same vehicle with a new ID
@@ -454,17 +498,17 @@ class CarCounter:
                                     self.first_seen[track_id] = self.first_seen[original_id]
                                 else:
                                     # Original didn't have first_seen (shouldn't happen now, but safety)
-                                    self.first_seen[track_id] = (center_x, current_time)
+                                    self.first_seen[track_id] = (center_x, frame_timestamp)
                                 if original_id in self.vehicle_speeds:
                                     self.vehicle_speeds[track_id] = self.vehicle_speeds[original_id]
                                 self.log_message(f"{vehicle_type} {track_id} re-entered (merged with ID {original_id}) at X={center_x:.1f}")
                             else:
                                 # New vehicle entry
-                                self.first_seen[track_id] = (center_x, current_time)
+                                self.first_seen[track_id] = (center_x, frame_timestamp)
                                 self.log_message(f"{vehicle_type} {track_id} entered ROI at X={center_x:.1f}")
                         
                         # Always update last seen position
-                        self.last_seen[track_id] = (center_x, current_time)
+                        self.last_seen[track_id] = (center_x, frame_timestamp)
                         
                         # Store track history for visualization
                         track = self.track_history[track_id]
@@ -497,9 +541,20 @@ class CarCounter:
                             distance_pixels = abs(last_x - first_x)
                             distance_meters = distance_pixels / self.pixels_per_meter
                             
+                            # Ignore tracking flicker - if vehicle hasn't moved >50 pixels (~2m) from entry in <5s, it's not really gone
+                            # This prevents spam from vehicles stopping/slow-moving with unstable tracking
+                            if distance_pixels < 50 and duration < 5.0:
+                                # Tracking flicker - log once per vehicle ID to help debug
+                                if track_id not in getattr(self, '_flicker_logged', set()):
+                                    if not hasattr(self, '_flicker_logged'):
+                                        self._flicker_logged = set()
+                                    self._flicker_logged.add(track_id)
+                                    self.log_message(f"{vehicle_type} {track_id} appears stationary (moved {distance_meters:.1f}m in {duration:.1f}s), continuing to track")
+                                continue
+                            
                             # Only calculate if vehicle moved reasonable distance OR time
-                            # Very low thresholds to catch edge-of-frame detections (0.1s = 1 frame at 10fps, 0.3m = ~1ft)
-                            if duration > 0.1 and distance_meters > 0.3:
+                            # Ultra-low thresholds to catch brief detections (0.05s, 0.2m = ~8 inches)
+                            if duration > 0.05 and distance_meters > 0.2:
                                 speed_mps = distance_meters / duration
                                 speed_mph = speed_mps * 2.23694
                                 
@@ -544,11 +599,10 @@ class CarCounter:
                 
                 self.ids_in_roi = current_roi_ids
                 
-                # Clean up old recent exits (older than threshold)
-                current_cleanup_time = time.time()
+                # Clean up old recent exits (older than threshold, using frame timestamps)
                 expired_exits = [
                     exit_id for exit_id, (_, exit_time, _) in self.recent_exits.items()
-                    if current_cleanup_time - exit_time > self.reentry_time_threshold
+                    if frame_timestamp - exit_time > self.reentry_time_threshold
                 ]
                 for exit_id in expired_exits:
                     del self.recent_exits[exit_id]
@@ -576,11 +630,18 @@ class CarCounter:
             else:
                 # In headless mode, just keep processing
                 if frame_count % 100 == 0:
+                    queue_size = self.frame_queue.qsize()
                     if MOTION_DETECTION:
                         skip_percent = (self.inference_skipped_count / frame_count) * 100
-                        print(f"Processed {frame_count} frames, detected {self.car_count} vehicles (skipped {skip_percent:.1f}% due to no motion)")
+                        print(f"Processed {frame_count} frames, detected {self.car_count} vehicles (skipped {skip_percent:.1f}% due to no motion) [queue: {queue_size}/10]")
                     else:
-                        print(f"Processed {frame_count} frames, detected {self.car_count} vehicles")
+                        print(f"Processed {frame_count} frames, detected {self.car_count} vehicles [queue: {queue_size}/10]")
+        
+        # Stop frame reader thread
+        self.reader_running = False
+        if self.frame_reader_thread and self.frame_reader_thread.is_alive():
+            print("[Main] Waiting for frame reader thread to stop...")
+            self.frame_reader_thread.join(timeout=2.0)
         
         self.cap.release()
         if not self.headless:
