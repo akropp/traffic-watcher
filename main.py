@@ -482,22 +482,24 @@ class CarCounter:
                         if not (self.roi_x1 <= center_x <= self.roi_x2 and self.roi_y1 <= center_y <= self.roi_y2):
                             continue
                         
-                        current_roi_ids.add(track_id)
-                        
                         # Store vehicle type
                         vehicle_type = CLASS_NAMES.get(class_id, "Vehicle")
                         self.vehicle_types[track_id] = vehicle_type
+                        
+                        # Skip tracking if this ID was already counted (prevents re-counting same vehicle)
+                        if track_id in self.counted_ids:
+                            # This ID was already counted - likely the same car re-entering or lingering
+                            # Don't track it again to avoid duplicate counts
+                            if track_id not in self.ids_in_roi:
+                                self.log_message(f"{vehicle_type} {track_id} re-entered ROI but was already counted, ignoring")
+                            continue
+                        
+                        current_roi_ids.add(track_id)
                         
                         # Track first and last seen positions (using frame timestamps, not wall clock)
                         
                         # Log entry and record first position
                         if track_id not in self.ids_in_roi:
-                            # Don't merge if this track_id was already counted (prevents re-counting same vehicle)
-                            if track_id in self.counted_ids:
-                                # This ID was already counted - likely the same car re-entering or lingering
-                                # Don't track it again to avoid duplicate counts
-                                self.log_message(f"{vehicle_type} {track_id} re-entered ROI but was already counted, ignoring")
-                                continue
                             
                             # Check if this is likely a re-entry of a recently exited vehicle (ID reassignment)
                             original_id = self.find_matching_recent_exit(center_x, vehicle_type, frame_timestamp)
