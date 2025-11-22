@@ -543,7 +543,8 @@ class CarCounter:
                             
                             # Ignore tracking flicker - if vehicle hasn't moved >50 pixels (~2m) from entry in <5s, it's not really gone
                             # This prevents spam from vehicles stopping/slow-moving with unstable tracking
-                            if distance_pixels < 50 and duration < 5.0:
+                            # BUT: if duration is exactly 0, the vehicle was only seen for 1 frame - let it exit cleanly
+                            if distance_pixels < 50 and 0.1 < duration < 5.0:
                                 # Tracking flicker - log once per vehicle ID to help debug
                                 if track_id not in getattr(self, '_flicker_logged', set()):
                                     if not hasattr(self, '_flicker_logged'):
