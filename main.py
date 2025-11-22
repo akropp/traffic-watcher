@@ -220,7 +220,7 @@ class CarCounter:
             
             success, frame = self.cap.read()
             if success and frame is not None:
-                # Measure actual frame interval (wall clock)
+                # Measure wall clock interval between successive frame reads
                 current_time = time.time()
                 if self.last_frame_time is not None:
                     interval = current_time - self.last_frame_time
@@ -228,9 +228,11 @@ class CarCounter:
                     self.frame_intervals.append(interval)
                     if len(self.frame_intervals) > 30:
                         self.frame_intervals.pop(0)
-                    # Update measured interval (average of recent intervals)
-                    if len(self.frame_intervals) >= 5:  # Need at least 5 samples
+                    # Only set measured interval after collecting enough samples (10 frames minimum)
+                    # This ensures we have a stable average before using it for calculations
+                    if len(self.frame_intervals) >= 10:
                         self.measured_frame_interval = sum(self.frame_intervals) / len(self.frame_intervals)
+                        
                 self.last_frame_time = current_time
                 # Downsample frame if needed
                 if VIDEO_SCALE != 1.0:
@@ -437,19 +439,23 @@ class CarCounter:
             # Reset retry count on success
             retry_count = 0
             
-            # Use measured frame interval once available (more accurate than reported FPS)
+            # Use measured frame interval if available and significantly different from reported
             if self.measured_frame_interval is not None and not interval_reported:
-                frame_interval = self.measured_frame_interval
-                measured_fps = 1.0 / frame_interval
+                measured_fps = 1.0 / self.measured_frame_interval
                 reported_fps = self.fps
                 interval_reported = True
-                print(f"[Frame Timing] Measured FPS: {measured_fps:.2f} (interval: {frame_interval:.4f}s)")
+                print(f"[Frame Timing] Measured FPS: {measured_fps:.2f} (interval: {self.measured_frame_interval:.4f}s)")
                 print(f"[Frame Timing] Reported FPS: {reported_fps:.2f} (interval: {1.0/reported_fps:.4f}s)")
-                if abs(measured_fps - reported_fps) > 1.0:
-                    print(f"[Frame Timing] Using MEASURED interval for accurate speed calculations")
-            elif self.measured_frame_interval is not None:
-                # Continuously update to the measured interval (handles rate changes)
-                frame_interval = self.measured_frame_interval
+                
+                # Only use measured if reported FPS seems wrong (>30 fps for typical camera stream, or <1 fps)
+                # OR if measured and reported differ significantly (>3x difference)
+                if True or reported_fps > 30 or reported_fps < 1 or (abs(measured_fps - reported_fps) / reported_fps) > 3.0:
+                    frame_interval = self.measured_frame_interval
+                    print(f"[Frame Timing] Using MEASURED interval (reported FPS appears incorrect)")
+                else:
+                    # Use reported FPS - it's more reliable for RTSP streams
+                    frame_interval = 1.0 / reported_fps
+                    print(f"[Frame Timing] Using REPORTED FPS (more reliable for RTSP streams)")
             
             # Increment frame timestamp (accounts for actual frame delivery, not processing time)
             frame_timestamp += frame_interval
@@ -463,7 +469,7 @@ class CarCounter:
             if SKIP_INFERENCE:
                 frame_count += 1
                 if frame_count % 100 == 0:
-                    print(f"Decode-only mode: Processed {frame_count} frames (no inference)")
+                    print(f"Decode-only mode: Processed {frame_count} frames (no inference) {1.0 / frame_interval:.2f} FPS")
                 continue
 
             # Check for motion before running expensive YOLO inference
@@ -476,7 +482,7 @@ class CarCounter:
                 if frame_count % 100 == 0:
                     skip_percent = (self.inference_skipped_count / frame_count) * 100
                     queue_size = self.frame_queue.qsize()
-                    print(f"Processed {frame_count} frames (skipped {skip_percent:.1f}% due to no motion) [queue: {queue_size}/10]")
+                    print(f"Processed {frame_count} frames (skipped {skip_percent:.1f}% due to no motion) [queue: {queue_size}/10] {1.0 / frame_interval:.2f} FPS")
             
             else:
                 # Motion detected - run inference
@@ -685,9 +691,9 @@ class CarCounter:
                     queue_size = self.frame_queue.qsize()
                     if MOTION_DETECTION:
                         skip_percent = (self.inference_skipped_count / frame_count) * 100
-                        print(f"Processed {frame_count} frames, detected {self.car_count} vehicles (skipped {skip_percent:.1f}% due to no motion) [queue: {queue_size}/10]")
+                        print(f"Processed {frame_count} frames, detected {self.car_count} vehicles (skipped {skip_percent:.1f}% due to no motion) [queue: {queue_size}/10] {1.0 / frame_interval:.2f} FPS")
                     else:
-                        print(f"Processed {frame_count} frames, detected {self.car_count} vehicles [queue: {queue_size}/10]")
+                        print(f"Processed {frame_count} frames, detected {self.car_count} vehicles [queue: {queue_size}/10] {1.0 / frame_interval:.2f} FPS")
         
         # Stop frame reader thread
         self.reader_running = False
