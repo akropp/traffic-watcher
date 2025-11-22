@@ -82,6 +82,7 @@ class CarCounter:
         self.ids_in_roi = set()    # track IDs currently in ROI
         self.recent_exits = {}     # track_id -> (x, time, vehicle_type) - for merging rapid re-entries
         self.id_mapping = {}       # new_id -> original_id - for tracking ID reassignments
+        self.counted_ids = set()   # track IDs that have already been counted (prevents duplicate counts)
         self.car_count = 0
         self.headless = headless
         self.running = True
@@ -197,6 +198,11 @@ class CarCounter:
         if not MOTION_DETECTION:
             return True  # Always run inference if motion detection disabled
         
+        # Always run inference if we're actively tracking vehicles
+        if len(self.ids_in_roi) > 0:
+            self.frames_since_motion = 0  # Reset counter while tracking
+            return True
+        
         # Extract ROI
         roi = frame[self.roi_y1:self.roi_y2, self.roi_x1:self.roi_x2]
         
@@ -225,10 +231,10 @@ class CarCounter:
             self.frames_since_motion = 0
             return True
         
-        # Continue running inference for a few frames after motion stops
-        # (vehicles might still be in ROI)
+        # Continue running inference longer after motion stops (10 seconds)
+        # Extended grace period to ensure slow-moving vehicles are fully tracked
         self.frames_since_motion += 1
-        if self.frames_since_motion < 30:  # ~5 seconds at 6fps
+        if self.frames_since_motion < 60:  # ~10 seconds at 6fps, ~12 seconds at 5fps
             return True
         
         return False
@@ -486,9 +492,9 @@ class CarCounter:
                             distance_pixels = abs(last_x - first_x)
                             distance_meters = distance_pixels / self.pixels_per_meter
                             
-                            # Only calculate if vehicle moved reasonable distance and time
-                            # Low thresholds to catch fast-moving vehicles (0.2s = ~5fps, 0.5m = ~2ft)
-                            if duration > 0.2 and distance_meters > 0.5:
+                            # Only calculate if vehicle moved reasonable distance OR time
+                            # Very low thresholds to catch edge-of-frame detections (0.1s = 1 frame at 10fps, 0.3m = ~1ft)
+                            if duration > 0.1 and distance_meters > 0.3:
                                 speed_mps = distance_meters / duration
                                 speed_mph = speed_mps * 2.23694
                                 
@@ -499,15 +505,28 @@ class CarCounter:
                                     direction = "southbound"
                                 
                                 self.vehicle_speeds[track_id] = speed_mph
-                                self.car_count += 1
-                                self.log_message(f"SAW {vehicle_type.upper()}: id={track_id}, speed={speed_mph:.1f} MPH, dir={direction}, distance={distance_meters:.1f}m, time={duration:.1f}s, total count={self.car_count}")
-                                self.save_snapshot(frame, track_id, speed_mph, direction, duration, distance_meters)
+                                
+                                # Get the original ID (in case this is a re-entry with new ID)
+                                original_id = self.id_mapping.get(track_id, track_id)
+                                
+                                # Only count if this vehicle hasn't been counted yet
+                                if original_id not in self.counted_ids:
+                                    self.car_count += 1
+                                    self.counted_ids.add(original_id)
+                                    self.log_message(f"SAW {vehicle_type.upper()}: id={track_id}, speed={speed_mph:.1f} MPH, dir={direction}, distance={distance_meters:.1f}m, time={duration:.1f}s, total count={self.car_count}")
+                                    self.save_snapshot(frame, track_id, speed_mph, direction, duration, distance_meters)
+                                else:
+                                    self.log_message(f"DUPLICATE AVOIDED: {vehicle_type} {track_id} (original_id={original_id}) already counted, speed={speed_mph:.1f} MPH")
                             else:
-                                # Insufficient data - might be a tracking glitch, add to recent exits
+                                # Insufficient data - might be a tracking glitch or edge detection
                                 if track_id in self.last_seen:
                                     exit_x, exit_time = self.last_seen[track_id]
                                     self.recent_exits[track_id] = (exit_x, exit_time, vehicle_type)
-                                self.log_message(f"{vehicle_type} {track_id} exited ROI (insufficient data: {distance_meters:.1f}m in {duration:.1f}s)")
+                                # Log with more detail for debugging
+                                if duration == 0.0:
+                                    self.log_message(f"{vehicle_type} {track_id} exited ROI (single-frame detection at X={first_x:.1f})")
+                                else:
+                                    self.log_message(f"{vehicle_type} {track_id} exited ROI (insufficient data: {distance_meters:.1f}m in {duration:.1f}s)")
                         else:
                             # No tracking data - add to recent exits
                             if track_id in self.last_seen:
