@@ -261,14 +261,18 @@ class CarCounter:
         thresh = cv2.threshold(frame_delta, 25, 255, cv2.THRESH_BINARY)[1]
         thresh = cv2.dilate(thresh, None, iterations=2)
         
-        # Count changed pixels
+        # Find contours of motion regions
+        contours, _ = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Count total changed pixels and check for large contours
         changed_pixels = cv2.countNonZero(thresh)
+        has_large_contour = any(cv2.contourArea(c) > MOTION_MIN_AREA for c in contours)
         
         # Update previous frame
         self.prev_gray = gray
         
-        # Motion detected if enough pixels changed
-        if changed_pixels > MOTION_THRESHOLD:
+        # Motion detected if enough pixels changed AND we have a solid motion region
+        if changed_pixels > MOTION_THRESHOLD and has_large_contour:
             self.last_motion_time = frame_timestamp
             return True
         
