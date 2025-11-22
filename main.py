@@ -34,6 +34,11 @@ HEADLESS = os.getenv('HEADLESS', 'true').lower() == 'true'
 # Skip YOLO inference (for testing decode-only CPU usage)
 SKIP_INFERENCE = os.getenv('SKIP_INFERENCE', 'false').lower() == 'true'
 
+# Motion detection settings
+MOTION_DETECTION = os.getenv('MOTION_DETECTION', 'true').lower() == 'true'
+MOTION_THRESHOLD = int(os.getenv('MOTION_THRESHOLD', '500'))  # Pixels changed threshold
+MOTION_MIN_AREA = int(os.getenv('MOTION_MIN_AREA', '100'))    # Minimum contour area
+
 # Video downsampling scale (0.5 = half resolution, 1.0 = original)
 # Lower values = faster processing but less accurate detection
 # Recommended: 0.5 for CPU, 1.0 for GPU
@@ -171,6 +176,13 @@ class CarCounter:
         print(f"ROI: ({self.roi_x1}, {self.roi_y1}) to ({self.roi_x2}, {self.roi_y2})")
         print(f"Mode: {'Headless' if self.headless else 'GUI'}")
         print(f"Video Scale: {VIDEO_SCALE}")
+        print(f"Motion Detection: {'Enabled' if MOTION_DETECTION else 'Disabled'}")
+        
+        # Motion detection state
+        self.prev_gray = None
+        self.frames_since_motion = 0
+        self.motion_detected_count = 0
+        self.inference_skipped_count = 0
         
         # Setup signal handler for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -179,6 +191,47 @@ class CarCounter:
     def _signal_handler(self, signum, frame):
         print("\nShutting down gracefully...")
         self.running = False
+    
+    def detect_motion(self, frame):
+        """Detect motion in ROI using frame differencing"""
+        if not MOTION_DETECTION:
+            return True  # Always run inference if motion detection disabled
+        
+        # Extract ROI
+        roi = frame[self.roi_y1:self.roi_y2, self.roi_x1:self.roi_x2]
+        
+        # Convert to grayscale
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (21, 21), 0)
+        
+        # First frame initialization
+        if self.prev_gray is None:
+            self.prev_gray = gray
+            return True
+        
+        # Compute absolute difference
+        frame_delta = cv2.absdiff(self.prev_gray, gray)
+        thresh = cv2.threshold(frame_delta, 25, 255, cv2.THRESH_BINARY)[1]
+        thresh = cv2.dilate(thresh, None, iterations=2)
+        
+        # Count changed pixels
+        changed_pixels = cv2.countNonZero(thresh)
+        
+        # Update previous frame
+        self.prev_gray = gray
+        
+        # Motion detected if enough pixels changed
+        if changed_pixels > MOTION_THRESHOLD:
+            self.frames_since_motion = 0
+            return True
+        
+        # Continue running inference for a few frames after motion stops
+        # (vehicles might still be in ROI)
+        self.frames_since_motion += 1
+        if self.frames_since_motion < 30:  # ~5 seconds at 6fps
+            return True
+        
+        return False
 
     def find_matching_recent_exit(self, center_x, vehicle_type, current_time):
         """Check if this entry matches a recent exit (likely same vehicle with new ID)"""
@@ -323,6 +376,21 @@ class CarCounter:
                 if frame_count % 100 == 0:
                     print(f"Decode-only mode: Processed {frame_count} frames (no inference)")
                 continue
+
+            # Check for motion before running expensive YOLO inference
+            has_motion = self.detect_motion(frame)
+            
+            if not has_motion:
+                # No motion detected - skip inference
+                self.inference_skipped_count += 1
+                frame_count += 1
+                if frame_count % 100 == 0:
+                    skip_percent = (self.inference_skipped_count / frame_count) * 100
+                    print(f"Processed {frame_count} frames (skipped {skip_percent:.1f}% due to no motion)")
+                continue
+            
+            # Motion detected - run inference
+            self.motion_detected_count += 1
 
             # Run YOLOv8 tracking on the CROP
             # We don't need imgsz=1280 anymore because the crop is small and focused

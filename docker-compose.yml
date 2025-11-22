@@ -13,6 +13,12 @@ services:
       # Skip YOLO inference (for testing decode-only CPU usage)
       - SKIP_INFERENCE=false
       
+      # Motion detection - skip inference when no motion detected
+      # Significantly reduces CPU usage when no vehicles are present
+      - MOTION_DETECTION=true
+      - MOTION_THRESHOLD=500    # Pixels changed threshold (lower = more sensitive)
+      - MOTION_MIN_AREA=100      # Minimum contour area
+      
       # GStreamer pipeline with VA-API hardware decode
       # Using native GStreamer Python bindings (not OpenCV) for full control
       # appsink name=appsink0 is required for Python bindings to find it
