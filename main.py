@@ -612,6 +612,11 @@ class CarCounter:
                     self.first_seen.pop(exit_id, None)
                     self.last_seen.pop(exit_id, None)
                     self.vehicle_speeds.pop(exit_id, None)
+                    # Clean up counted_ids to allow YOLO to reuse this ID for new vehicles
+                    # Remove the original_id if this was a merged ID, otherwise remove the exit_id
+                    original_id = self.id_mapping.get(exit_id, exit_id)
+                    self.counted_ids.discard(original_id)
+                    self.id_mapping.pop(exit_id, None)
 
             # Visualize ROI
             cv2.rectangle(frame, (self.roi_x1, self.roi_y1), (self.roi_x2, self.roi_y2), (0, 0, 255), 1)
