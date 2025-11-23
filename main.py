@@ -81,6 +81,7 @@ class CarCounter:
         self.last_seen = {}        # track_id -> (x, time)
         self.vehicle_speeds = {}   # track_id -> speed
         self.vehicle_types = {}    # track_id -> vehicle type
+        self.snapshot_frames = {}  # track_id -> frame (captured at midpoint for best view)
         self.ids_in_roi = set()    # track IDs currently in ROI
         self.pending_exits = {}    # track_id -> (exit_time, vehicle_type) - vehicles that left ROI, waiting to confirm and count
         self.id_mapping = {}       # new_id -> original_id - for tracking ID reassignments
@@ -325,21 +326,47 @@ class CarCounter:
                 f.write(full_msg + "\n")
 
     def save_snapshot(self, frame, track_id, speed_mph, direction, duration, distance):
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        timestamp_str = time.strftime("%Y%m%d_%H%M%S")
+        timestamp_display = time.strftime("%Y-%m-%d %H:%M:%S")
         vehicle_type = self.vehicle_types.get(track_id, "Vehicle").lower()
-        filename = f"snapshots/{vehicle_type}_{track_id}_{timestamp}.jpg"
         
-        # Draw info on frame copy
-        snapshot = frame.copy()
-        cv2.putText(snapshot, f"ID: {track_id}", (50, 150), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        cv2.putText(snapshot, f"Type: {self.vehicle_types.get(track_id, 'Vehicle')}", (50, 200), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
-        cv2.putText(snapshot, f"Speed: {speed_mph:.1f} MPH", (50, 250), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-        cv2.putText(snapshot, f"Count: {self.car_count}", (50, 300), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+        # Save original full frame (as-is, no overlay)
+        filename_full = f"snapshots/{vehicle_type}_{track_id}_{timestamp_str}_full.jpg"
+        cv2.imwrite(filename_full, frame)
         
-        cv2.imwrite(filename, snapshot)
-        print(f"[Snapshot] Saved to {filename}")
+        # Create ROI-only snapshot with text overlay
+        filename_roi = f"snapshots/{vehicle_type}_{track_id}_{timestamp_str}.jpg"
+        roi_snapshot = frame[self.roi_y1:self.roi_y2, self.roi_x1:self.roi_x2].copy()
         
-        # Save to database
+        # Add text overlay to ROI snapshot in corner
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.6
+        thickness = 2
+        color_white = (255, 255, 255)
+        color_black = (0, 0, 0)
+        
+        # Text with black outline for visibility
+        y_offset = 30
+        texts = [
+            f"{timestamp_display}",
+            f"ID: {track_id}",
+            f"Type: {self.vehicle_types.get(track_id, 'Vehicle')}",
+            f"Speed: {speed_mph:.1f} MPH {direction}",
+            f"Count: {self.car_count}"
+        ]
+        
+        for i, text in enumerate(texts):
+            y_pos = y_offset + (i * 35)
+            # Black outline
+            cv2.putText(roi_snapshot, text, (12, y_pos), font, font_scale, color_black, thickness + 1)
+            # White text
+            cv2.putText(roi_snapshot, text, (10, y_pos - 2), font, font_scale, color_white, thickness)
+        
+        cv2.imwrite(filename_roi, roi_snapshot)
+        print(f"[Snapshot] Saved full: {filename_full}")
+        print(f"[Snapshot] Saved ROI: {filename_roi}")
+        
+        # Save to database (use ROI filename for website display)
         try:
             db_timestamp = datetime.now().isoformat()
             database.add_observation(
@@ -350,12 +377,12 @@ class CarCounter:
                 duration=duration,
                 distance=distance,
                 speed=speed_mph,
-                image_filename=filename
+                image_filename=filename_roi
             )
         except Exception as e:
             print(f"[Database] Error saving observation: {e}")
         
-        return filename
+        return filename_roi
 
     def reconnect_stream(self):
         """Reconnect to the video stream"""
@@ -542,6 +569,8 @@ class CarCounter:
                                     self.first_seen[track_id] = (center_x, frame_timestamp)
                                 if original_id in self.vehicle_speeds:
                                     self.vehicle_speeds[track_id] = self.vehicle_speeds[original_id]
+                                if original_id in self.snapshot_frames:
+                                    self.snapshot_frames[track_id] = self.snapshot_frames[original_id]
                                 self.log_message(f"{vehicle_type} {track_id} resumed tracking (merged with ID {original_id}) at X={center_x:.1f}")
                             else:
                                 # New vehicle entry
@@ -550,6 +579,20 @@ class CarCounter:
                         
                         # Always update last seen position
                         self.last_seen[track_id] = (center_x, frame_timestamp)
+                        
+                        # Capture snapshot frame when vehicle is well into ROI for best image
+                        # Capture at midpoint between entry and current position, or on first few frames
+                        if track_id in self.first_seen and track_id not in self.snapshot_frames:
+                            # Capture on first detection
+                            self.snapshot_frames[track_id] = frame.copy()
+                        elif track_id in self.first_seen:
+                            # Update snapshot if vehicle is near middle of travel distance
+                            first_x, _ = self.first_seen[track_id]
+                            distance_traveled = abs(center_x - first_x)
+                            roi_width = self.roi_x2 - self.roi_x1
+                            # Update snapshot when vehicle is roughly in middle third of ROI
+                            if distance_traveled > roi_width * 0.2 and distance_traveled < roi_width * 0.6:
+                                self.snapshot_frames[track_id] = frame.copy()
                         
                         # Store track history for visualization
                         track = self.track_history[track_id]
@@ -626,7 +669,9 @@ class CarCounter:
                                     self.car_count += 1
                                     self.counted_ids.add(original_id)
                                     self.log_message(f"SAW {vehicle_type.upper()}: id={track_id}, speed={speed_mph:.1f} MPH, dir={direction}, distance={distance_meters:.1f}m, time={duration:.1f}s, total count={self.car_count}")
-                                    self.save_snapshot(frame, track_id, speed_mph, direction, duration, distance_meters)
+                                    # Use stored snapshot frame if available, otherwise use current frame
+                                    snapshot_frame = self.snapshot_frames.get(track_id, frame)
+                                    self.save_snapshot(snapshot_frame, track_id, speed_mph, direction, duration, distance_meters)
                                 else:
                                     self.log_message(f"DUPLICATE AVOIDED: {vehicle_type} {track_id} (original_id={original_id}) already counted, speed={speed_mph:.1f} MPH")
                             else:
@@ -645,6 +690,7 @@ class CarCounter:
                     self.last_seen.pop(track_id, None)
                     self.vehicle_speeds.pop(track_id, None)
                     self.vehicle_types.pop(track_id, None)
+                    self.snapshot_frames.pop(track_id, None)
                     # Clean up counted_ids to allow ID reuse
                     original_id = self.id_mapping.get(track_id, track_id)
                     self.counted_ids.discard(original_id)
