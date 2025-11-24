@@ -442,11 +442,18 @@ class CarCounter:
         
         # Text with black outline for visibility
         y_offset = 30
+        
+        # Format speed/direction line
+        if speed_mph > 0 and direction != "unknown":
+            speed_text = f"Speed: {speed_mph:.1f} MPH {direction}"
+        else:
+            speed_text = "Speed: No data"
+        
         texts = [
             f"{timestamp_display}",
             f"ID: {track_id}",
             f"Type: {self.vehicle_types.get(track_id, 'Vehicle')}",
-            f"Speed: {speed_mph:.1f} MPH {direction}",
+            speed_text,
             f"Count: {self.car_count}"
         ]
         
@@ -596,20 +603,27 @@ class CarCounter:
                 # Motion detected - run inference
                 self.motion_detected_count += 1
 
-                # Use motion bounding box if available (for faster inference)
+                # Use motion bounding box only when NOT actively tracking
+                # When tracking, use full ROI to maintain consistent context for YOLO tracker
                 inference_frame = roi_frame
                 motion_offset_x = 0
                 motion_offset_y = 0
                 
-                if motion_debug and motion_debug.get('motion_bbox'):
-                    # Crop to motion area for faster inference
+                if len(self.ids_in_roi) == 0 and motion_debug and motion_debug.get('motion_bbox'):
+                    # No active tracking - use motion bbox for faster inference
                     mx1, my1, mx2, my2 = motion_debug['motion_bbox']
                     inference_frame = roi_frame[my1:my2, mx1:mx2]
                     motion_offset_x = mx1
                     motion_offset_y = my1
+                    print(f"Inference frame size: {inference_frame.shape} (motion crop), queue size: {self.frame_queue.qsize()}/{self.frame_queue.maxsize}")
+                else:
+                    # Active tracking - use full ROI for stable tracking
+                    if len(self.ids_in_roi) > 0:
+                        print(f"Inference frame size: {inference_frame.shape} (full ROI, tracking {len(self.ids_in_roi)} vehicles), queue size: {self.frame_queue.qsize()}/{self.frame_queue.maxsize}")
+                    else:
+                        print(f"Inference frame size: {inference_frame.shape} (full ROI), queue size: {self.frame_queue.qsize()}/{self.frame_queue.maxsize}")
 
                 # Run YOLOv8 tracking on the cropped area
-                print(f"Inference frame size: {inference_frame.shape}, queue size: {self.frame_queue.qsize()}/{self.frame_queue.maxsize}")
                 results = self.model.track(inference_frame, persist=True, classes=VEHICLE_CLASSES, verbose=False, conf=0.25)
                 
                 current_roi_ids = set()
@@ -805,13 +819,37 @@ class CarCounter:
                                 else:
                                     self.log_message(f"DUPLICATE AVOIDED: {vehicle_type} {track_id} (original_id={original_id}) already counted, speed={speed_mph:.1f} MPH")
                             else:
-                                # Insufficient movement data
-                                if duration == 0.0:
-                                    self.log_message(f"{vehicle_type} {track_id} exited (single-frame detection)")
+                                # Insufficient movement data - but still count as detected
+                                original_id = self.id_mapping.get(track_id, track_id)
+                                
+                                if original_id not in self.counted_ids:
+                                    self.car_count += 1
+                                    self.counted_ids.add(original_id)
+                                    
+                                    if duration == 0.0:
+                                        self.log_message(f"SAW {vehicle_type.upper()}: id={track_id} (single-frame detection, no speed data), total count={self.car_count}")
+                                    else:
+                                        self.log_message(f"SAW {vehicle_type.upper()}: id={track_id} (insufficient data: {distance_meters:.1f}m in {duration:.1f}s, no speed), total count={self.car_count}")
+                                    
+                                    # Save snapshot without speed/direction info
+                                    snapshot_frame = self.snapshot_frames.get(track_id, frame)
+                                    self.save_snapshot(snapshot_frame, track_id, 0.0, "unknown", duration, distance_meters)
                                 else:
-                                    self.log_message(f"{vehicle_type} {track_id} exited (insufficient data: {distance_meters:.1f}m in {duration:.1f}s)")
+                                    self.log_message(f"DUPLICATE AVOIDED: {vehicle_type} {track_id} (original_id={original_id}) already counted (insufficient data)")
                         else:
-                            self.log_message(f"{vehicle_type} {track_id} exited (no tracking data)")
+                            # No tracking data - but still count as detected
+                            original_id = self.id_mapping.get(track_id, track_id)
+                            
+                            if original_id not in self.counted_ids:
+                                self.car_count += 1
+                                self.counted_ids.add(original_id)
+                                self.log_message(f"SAW {vehicle_type.upper()}: id={track_id} (no tracking data), total count={self.car_count}")
+                                
+                                # Try to save snapshot if we have one
+                                snapshot_frame = self.snapshot_frames.get(track_id, frame)
+                                self.save_snapshot(snapshot_frame, track_id, 0.0, "unknown", 0.0, 0.0)
+                            else:
+                                self.log_message(f"DUPLICATE AVOIDED: {vehicle_type} {track_id} (original_id={original_id}) already counted (no tracking data)")
                 
                 # Clean up confirmed exits
                 for track_id in confirmed_exits:
@@ -897,12 +935,25 @@ class CarCounter:
                     bbox_y1 = my1 + self.roi_y1
                     bbox_x2 = mx2 + self.roi_x1
                     bbox_y2 = my2 + self.roi_y1
-                    # Draw in cyan for fresh detection, orange if reused
+                    
+                    # Color and label based on usage
                     is_reused = motion_debug.get('bbox_reused', False)
-                    bbox_color = (0, 165, 255) if is_reused else (255, 255, 0)  # Orange if reused, cyan if fresh
+                    is_tracking = len(self.ids_in_roi) > 0
+                    
+                    if is_tracking:
+                        # Gray - motion bbox exists but not used (tracking active)
+                        bbox_color = (128, 128, 128)
+                        label = "Motion detected (using full ROI for tracking)"
+                    elif is_reused:
+                        # Orange - reused from previous frame
+                        bbox_color = (0, 165, 255)
+                        label = "Inference Area (reused)"
+                    else:
+                        # Cyan - fresh detection, actively used
+                        bbox_color = (255, 255, 0)
+                        label = "Inference Area"
+                    
                     cv2.rectangle(frame, (bbox_x1, bbox_y1), (bbox_x2, bbox_y2), bbox_color, 3)
-                    # Add label
-                    label = "Inference Area (reused)" if is_reused else "Inference Area"
                     cv2.putText(frame, label, (bbox_x1 + 5, bbox_y1 + 20), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, bbox_color, 2)
                 
