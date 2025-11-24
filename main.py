@@ -589,6 +589,7 @@ class CarCounter:
                     motion_offset_y = my1
 
                 # Run YOLOv8 tracking on the cropped area
+                print(f"Inference frame size: {inference_frame.shape}, queue size: {self.frame_queue.qsize()}/{self.frame_queue.maxsize}")
                 results = self.model.track(inference_frame, persist=True, classes=VEHICLE_CLASSES, verbose=False, conf=0.25)
                 
                 current_roi_ids = set()
@@ -886,8 +887,8 @@ class CarCounter:
                     break
             else:
                 # In headless mode, just keep processing
-                queue_size = self.frame_queue.qsize()
-                if frame_count % 100 == 0 or queue_size > 1:
+                if frame_count % 100 == 0:
+                    queue_size = self.frame_queue.qsize()
                     if MOTION_DETECTION:
                         skip_percent = (self.inference_skipped_count / frame_count) * 100
                         print(f"Processed {frame_count} frames, detected {self.car_count} vehicles (skipped {skip_percent:.1f}% due to no motion) [queue: {queue_size}/{self.frame_queue.maxsize}] {1.0 / frame_interval:.2f} FPS")
