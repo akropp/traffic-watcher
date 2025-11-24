@@ -197,7 +197,7 @@ class CarCounter:
         self.inference_skipped_count = 0
         
         # Frame queue for async reading (prevents frame drops during inference)
-        self.frame_queue = queue.Queue(maxsize=20)  # Buffer up to 20 frames (4 seconds)
+        self.frame_queue = queue.Queue(maxsize=40)  # Buffer up to 20 frames (4 seconds)
         self.frame_reader_thread = None
         self.reader_running = False
         
@@ -495,10 +495,10 @@ class CarCounter:
             if not has_motion:
                 # No motion detected - skip inference
                 self.inference_skipped_count += 1
-                if frame_count % 100 == 0:
+                if frame_count % 100 == 0 or self.frame_queue.qsize() > 1:
                     skip_percent = (self.inference_skipped_count / frame_count) * 100
                     queue_size = self.frame_queue.qsize()
-                    print(f"Processed {frame_count} frames (skipped {skip_percent:.1f}% due to no motion) [queue: {queue_size}/10] {1.0 / frame_interval:.2f} FPS")
+                    print(f"Processed {frame_count} frames (skipped {skip_percent:.1f}% due to no motion) [queue: {queue_size}/{self.frame_queue.maxsize}] {1.0 / frame_interval:.2f} FPS")
             
             else:
                 # Motion detected - run inference
