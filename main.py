@@ -306,8 +306,8 @@ class CarCounter:
                 roi_height = self.roi_y2 - self.roi_y1
                 x_min = max(0, x_min - x_padding)
                 y_min = max(0, y_min - y_padding)
-                x_max = min(roi_width, x_max + x_padding)
-                y_max = min(roi_height, y_max + y_padding)
+                x_max = min(roi_width + x_padding, x_max + x_padding)
+                y_max = min(roi_height + y_padding, y_max + y_padding)
                 
                 # Ensure minimum size for YOLO to work properly (at least 400x400)
                 bbox_width = x_max - x_min
@@ -316,11 +316,11 @@ class CarCounter:
                 if bbox_width < min_size:
                     expand = (min_size - bbox_width) / 2
                     x_min = max(0, x_min - expand)
-                    x_max = min(roi_width, x_max + expand)
+                    x_max = min(roi_width + x_padding, x_max + expand)
                 if bbox_height < min_size:
                     expand = (min_size - bbox_height) / 2
                     y_min = max(0, y_min - expand)
-                    y_max = min(roi_height, y_max + expand)
+                    y_max = min(roi_height + y_padding, y_max + expand)
                 
                 motion_bbox = (int(x_min), int(y_min), int(x_max), int(y_max))
                 # Fresh detection - reset reuse count and store bbox
