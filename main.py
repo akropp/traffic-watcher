@@ -784,14 +784,15 @@ class CarCounter:
                     inference_frame = roi_frame[my1:my2, mx1:mx2]
                     motion_offset_x = mx1
                     motion_offset_y = my1
-                    print(f"Inference frame size: {inference_frame.shape} (motion crop), queue size: {self.frame_queue.qsize()}/{self.frame_queue.maxsize}")
+#                    print(f"Inference frame size: {inference_frame.shape} (motion crop), queue size: {self.frame_queue.qsize()}/{self.frame_queue.maxsize}")
                 else:
                     # Active tracking - use full ROI for stable tracking
-                    if len(self.ids_in_roi) > 0:
-                        print(f"Inference frame size: {inference_frame.shape} (full ROI, tracking {len(self.ids_in_roi)} vehicles), queue size: {self.frame_queue.qsize()}/{self.frame_queue.maxsize}")
-                    else:
-                        print(f"Inference frame size: {inference_frame.shape} (full ROI), queue size: {self.frame_queue.qsize()}/{self.frame_queue.maxsize}")
-
+#                    if len(self.ids_in_roi) > 0:
+#                        print(f"Inference frame size: {inference_frame.shape} (full ROI, tracking {len(self.ids_in_roi)} vehicles), queue size: {self.frame_queue.qsize()}/{self.frame_queue.maxsize}")
+#                    else:
+#                        print(f"Inference frame size: {inference_frame.shape} (full ROI), queue size: {self.frame_queue.qsize()}/{self.frame_queue.maxsize}")
+                    pass
+                
                 # Run YOLOv8 tracking on the cropped area
                 results = self.model.track(inference_frame, persist=True, classes=VEHICLE_CLASSES, verbose=False, conf=0.25)
                 
