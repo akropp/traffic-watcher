@@ -52,11 +52,34 @@ LINE_LEFT_X_RATIO = 0.64
 LINE_RIGHT_X_RATIO = 0.77
 
 # Region of Interest (ROI) for detection (0-1 relative to frame dimensions)
-# Top-Left (x, y) and Bottom-Right (x, y)
+# Can use either rectangular ROI or polygon ROI
+
+# Rectangular ROI (used if ROI_POLYGON is None)
 ROI_TOP_LEFT_X = 0.52
 ROI_TOP_LEFT_Y = 0.0
 ROI_BOTTOM_RIGHT_X = 0.86
 ROI_BOTTOM_RIGHT_Y = 0.26 # Top half of the frame
+
+# Polygon ROI (optional - set to None to use rectangular ROI above)
+# Define as list of (x, y) points in 0-1 relative coordinates
+# Example for slanted road: [(0.52, 0.0), (0.86, 0.0), (0.90, 0.26), (0.48, 0.26)]
+ROI_POLYGON = None  # Set to list of points or None for rectangle
+
+# Perspective Transform (for slanted roads - straightens them before processing)
+# Define 4 corner points of the slanted road region in 0-1 relative coordinates
+# Points should be in order: top-left, top-right, bottom-right, bottom-left
+# Set to None to disable perspective transform
+# Example: [(0.52, 0.0), (0.86, 0.0), (0.90, 0.26), (0.48, 0.26)]
+PERSPECTIVE_TRANSFORM_SRC = [
+    (0.59, -0.04),
+    (0.89, 0.17),
+    (0.86, 0.28),
+    (0.56, 0.11)
+]
+# Output dimensions for straightened view (width, height in pixels)
+# Adjust aspect ratio to match the actual road dimensions
+PERSPECTIVE_TRANSFORM_DST_WIDTH = 800
+PERSPECTIVE_TRANSFORM_DST_HEIGHT = 250
 
 # Vehicle classes to detect (COCO dataset class IDs)
 # 2: car, 3: motorcycle, 5: bus, 7: truck
@@ -173,11 +196,98 @@ class CarCounter:
         self.pixels_between_lines = self.line_right_x - self.line_left_x
         self.pixels_per_meter = self.pixels_between_lines / DISTANCE_METERS
         
-        # Calculate ROI in pixels
-        self.roi_x1 = int(self.width * ROI_TOP_LEFT_X)
-        self.roi_y1 = int(self.height * ROI_TOP_LEFT_Y)
-        self.roi_x2 = int(self.width * ROI_BOTTOM_RIGHT_X)
-        self.roi_y2 = int(self.height * ROI_BOTTOM_RIGHT_Y)
+        # Perspective transform setup
+        self.perspective_matrix = None
+        self.perspective_matrix_inv = None
+        self.perspective_dst_width = 0
+        self.perspective_dst_height = 0
+        
+        if PERSPECTIVE_TRANSFORM_SRC is not None and len(PERSPECTIVE_TRANSFORM_SRC) == 4:
+            # Convert source points to pixels
+            src_points = np.float32([
+                [int(x * self.width), int(y * self.height)] 
+                for x, y in PERSPECTIVE_TRANSFORM_SRC
+            ])
+            
+            # Define destination points (straightened rectangle)
+            self.perspective_dst_width = PERSPECTIVE_TRANSFORM_DST_WIDTH
+            self.perspective_dst_height = PERSPECTIVE_TRANSFORM_DST_HEIGHT
+            dst_points = np.float32([
+                [0, 0],  # top-left
+                [self.perspective_dst_width, 0],  # top-right
+                [self.perspective_dst_width, self.perspective_dst_height],  # bottom-right
+                [0, self.perspective_dst_height]  # bottom-left
+            ])
+            
+            # Calculate perspective transform matrices
+            self.perspective_matrix = cv2.getPerspectiveTransform(src_points, dst_points)
+            self.perspective_matrix_inv = cv2.getPerspectiveTransform(dst_points, src_points)
+            
+            print(f"Using perspective transform: {PERSPECTIVE_TRANSFORM_SRC} -> {self.perspective_dst_width}x{self.perspective_dst_height}")
+        
+        # Calculate ROI - support both polygon and rectangle
+        self.roi_polygon_points = None
+        self.roi_mask = None
+        
+        if self.perspective_matrix is not None:
+            # Calculate bounding box of source points for motion detection
+            src_points_px = np.array([
+                [int(x * self.width), int(y * self.height)] 
+                for x, y in PERSPECTIVE_TRANSFORM_SRC
+            ])
+            x_coords = [p[0] for p in src_points_px]
+            y_coords = [p[1] for p in src_points_px]
+            # Store original bounding box for motion detection cropping
+            self.motion_roi_x1 = max(0, min(x_coords))  # Clamp to frame bounds
+            self.motion_roi_y1 = max(0, min(y_coords))
+            self.motion_roi_x2 = min(self.width, max(x_coords))
+            self.motion_roi_y2 = min(self.height, max(y_coords))
+            
+            # ROI for tracking is the entire transformed area
+            self.roi_x1 = 0
+            self.roi_y1 = 0
+            self.roi_x2 = self.perspective_dst_width
+            self.roi_y2 = self.perspective_dst_height
+            print(f"Motion detection ROI (original): ({self.motion_roi_x1}, {self.motion_roi_y1}) to ({self.motion_roi_x2}, {self.motion_roi_y2})")
+            print(f"Inference ROI (transformed): {self.perspective_dst_width}x{self.perspective_dst_height}")
+        elif ROI_POLYGON is not None:
+            # Convert polygon points to pixels
+            self.roi_polygon_points = np.array([
+                [int(x * self.width), int(y * self.height)] 
+                for x, y in ROI_POLYGON
+            ], dtype=np.int32)
+            
+            # Calculate bounding rectangle for the polygon
+            x_coords = [p[0] for p in self.roi_polygon_points]
+            y_coords = [p[1] for p in self.roi_polygon_points]
+            self.roi_x1 = min(x_coords)
+            self.roi_y1 = min(y_coords)
+            self.roi_x2 = max(x_coords)
+            self.roi_y2 = max(y_coords)
+            
+            # Motion detection uses same ROI
+            self.motion_roi_x1 = self.roi_x1
+            self.motion_roi_y1 = self.roi_y1
+            self.motion_roi_x2 = self.roi_x2
+            self.motion_roi_y2 = self.roi_y2
+            
+            # Create mask for polygon ROI
+            self.roi_mask = np.zeros((self.height, self.width), dtype=np.uint8)
+            cv2.fillPoly(self.roi_mask, [self.roi_polygon_points], 255)
+            
+            print(f"Using polygon ROI with {len(ROI_POLYGON)} points")
+        else:
+            # Rectangular ROI
+            self.roi_x1 = int(self.width * ROI_TOP_LEFT_X)
+            self.roi_y1 = int(self.height * ROI_TOP_LEFT_Y)
+            self.roi_x2 = int(self.width * ROI_BOTTOM_RIGHT_X)
+            self.roi_y2 = int(self.height * ROI_BOTTOM_RIGHT_Y)
+            
+            # Motion detection uses same ROI
+            self.motion_roi_x1 = self.roi_x1
+            self.motion_roi_y1 = self.roi_y1
+            self.motion_roi_x2 = self.roi_x2
+            self.motion_roi_y2 = self.roi_y2
         
         # Thresholds for merging rapid re-entries (scaled with VIDEO_SCALE)
         self.reentry_time_threshold = 2.0  # seconds - increased to catch more re-entries
@@ -189,7 +299,7 @@ class CarCounter:
             print(f"  (Note: GStreamer reports stream metadata FPS, actual delivery may vary)")
         print(f"  Using frame interval: {1.0/self.fps:.4f}s ({self.fps:.2f} FPS) for speed calculations")
         print(f"Speed Measurement Lines at X={self.line_left_x} and X={self.line_right_x}")
-        print(f"ROI: ({self.roi_x1}, {self.roi_y1}) to ({self.roi_x2}, {self.roi_y2})")
+        print(f"ROI Bounding Box: ({self.roi_x1}, {self.roi_y1}) to ({self.roi_x2}, {self.roi_y2})")
         print(f"Mode: {'Headless' if self.headless else 'GUI'}")
         print(f"Video Scale: {VIDEO_SCALE}")
         print(f"Motion Detection: {'Enabled' if MOTION_DETECTION else 'Disabled'}")
@@ -273,6 +383,12 @@ class CarCounter:
         frame_delta = cv2.absdiff(self.prev_gray, gray)
         thresh = cv2.threshold(frame_delta, 25, 255, cv2.THRESH_BINARY)[1]
         thresh = cv2.dilate(thresh, None, iterations=2)
+        
+        # Apply polygon mask if defined (to exclude areas outside the actual road)
+        if self.roi_mask is not None:
+            # Extract mask for this ROI region
+            roi_mask_crop = self.roi_mask[self.roi_y1:self.roi_y2, self.roi_x1:self.roi_x2]
+            thresh = cv2.bitwise_and(thresh, roi_mask_crop)
         
         # Find contours of motion regions
         contours, _ = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -579,8 +695,20 @@ class CarCounter:
             # Increment frame timestamp by actual interval between captures
             frame_timestamp += frame_interval
 
-            # Crop frame to ROI for faster processing
-            roi_frame = frame[self.roi_y1:self.roi_y2, self.roi_x1:self.roi_x2]
+            # For motion detection, use original frame crop (thresholds tuned for original size)
+            # For inference, use transformed frame (better for YOLO accuracy)
+            if self.perspective_matrix is not None:
+                # Extract original bounding box for motion detection
+                motion_frame = frame[self.motion_roi_y1:self.motion_roi_y2, 
+                                    self.motion_roi_x1:self.motion_roi_x2]
+                # Warp entire frame to straighten slanted road for inference
+                roi_frame = cv2.warpPerspective(frame, self.perspective_matrix, 
+                                                (self.perspective_dst_width, self.perspective_dst_height))
+            else:
+                # Crop frame to ROI for both motion and inference
+                roi_frame = frame[self.roi_y1:self.roi_y2, self.roi_x1:self.roi_x2]
+                motion_frame = roi_frame
+            
             if roi_frame.size == 0:
                 continue
 
@@ -592,7 +720,11 @@ class CarCounter:
                 continue
 
             # Check for motion before running expensive YOLO inference
-            has_motion, motion_debug = self.detect_motion(frame, frame_timestamp)
+            # Use original frame crop so thresholds don't need retuning
+            has_motion = True
+            motion_debug = None
+            if MOTION_DETECTION:
+                has_motion, motion_debug = self.detect_motion(motion_frame, frame_timestamp)
             frame_count += 1
             
             if not has_motion:
@@ -635,7 +767,7 @@ class CarCounter:
                     classes = results[0].boxes.cls.int().cpu().tolist()
                     
                     for xywh, xyxy, track_id, class_id in zip(boxes_xywh, boxes_xyxy, track_ids, classes):
-                        # Adjust coordinates from inference-crop to ROI to Frame
+                        # Adjust coordinates from inference space to original frame
                         x_crop, y_crop, w, h = xywh
                         x1_crop, y1_crop, x2_crop, y2_crop = xyxy
                         
@@ -647,21 +779,44 @@ class CarCounter:
                         x2_roi = x2_crop + motion_offset_x
                         y2_roi = y2_crop + motion_offset_y
                         
-                        # Then adjust from ROI to frame space
-                        x = x_roi + self.roi_x1
-                        y = y_roi + self.roi_y1
+                        if self.perspective_matrix is not None:
+                            # Transform coordinates back from straightened view to original frame
+                            # Transform center point for tracking
+                            point_transformed = np.array([[[x_roi, y_roi]]], dtype=np.float32)
+                            point_original = cv2.perspectiveTransform(point_transformed, self.perspective_matrix_inv)
+                            center_x = float(point_original[0][0][0])
+                            center_y = float(point_original[0][0][1])
+                            
+                            # Transform bounding box corners for visualization
+                            corners_transformed = np.array([
+                                [[x1_roi, y1_roi]],  # top-left
+                                [[x2_roi, y2_roi]]   # bottom-right
+                            ], dtype=np.float32)
+                            corners_original = cv2.perspectiveTransform(corners_transformed, self.perspective_matrix_inv)
+                            x1 = float(corners_original[0][0][0])
+                            y1 = float(corners_original[0][0][1])
+                            x2 = float(corners_original[1][0][0])
+                            y2 = float(corners_original[1][0][1])
+                            
+                            # For speed calculations, we use center X (which is now in original frame space)
+                            x = center_x
+                            y = center_y
+                        else:
+                            # Standard rectangular ROI - adjust from ROI to frame space
+                            x = x_roi + self.roi_x1
+                            y = y_roi + self.roi_y1
+                            x1 = x1_roi + self.roi_x1
+                            y1 = y1_roi + self.roi_y1
+                            x2 = x2_roi + self.roi_x1
+                            y2 = y2_roi + self.roi_y1
+                            center_x = float(x)
+                            center_y = float(y)
                         
-                        x1 = x1_roi + self.roi_x1
-                        y1 = y1_roi + self.roi_y1
-                        x2 = x2_roi + self.roi_x1
-                        y2 = y2_roi + self.roi_y1
-                        
-                        center_y = float(y)
-                        center_x = float(x)
-                        
-                        # Check if center point is inside ROI (It should be, since we cropped, but keep safety)
-                        if not (self.roi_x1 <= center_x <= self.roi_x2 and self.roi_y1 <= center_y <= self.roi_y2):
-                            continue
+                        # For perspective transform, we don't check ROI bounds since coordinates are already in frame space
+                        # For rectangular ROI, check if center point is inside ROI
+                        if self.perspective_matrix is None:
+                            if not (self.roi_x1 <= center_x <= self.roi_x2 and self.roi_y1 <= center_y <= self.roi_y2):
+                                continue
                         
                         # Store vehicle type
                         vehicle_type = CLASS_NAMES.get(class_id, "Vehicle")
@@ -865,7 +1020,22 @@ class CarCounter:
                     self.id_mapping.pop(track_id, None)
 
             # Visualize ROI
-            cv2.rectangle(frame, (self.roi_x1, self.roi_y1), (self.roi_x2, self.roi_y2), (0, 0, 255), 1)
+            if self.perspective_matrix is not None:
+                # Draw perspective transform source quadrilateral
+                if PERSPECTIVE_TRANSFORM_SRC is not None:
+                    src_points_viz = np.array([
+                        [int(x * self.width), int(y * self.height)] 
+                        for x, y in PERSPECTIVE_TRANSFORM_SRC
+                    ], dtype=np.int32)
+                    cv2.polylines(frame, [src_points_viz], isClosed=True, color=(0, 255, 255), thickness=3)
+                    cv2.putText(frame, "Perspective Transform", (src_points_viz[0][0], src_points_viz[0][1] - 10),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+            elif self.roi_polygon_points is not None:
+                # Draw polygon ROI
+                cv2.polylines(frame, [self.roi_polygon_points], isClosed=True, color=(0, 0, 255), thickness=2)
+            else:
+                # Draw rectangular ROI
+                cv2.rectangle(frame, (self.roi_x1, self.roi_y1), (self.roi_x2, self.roi_y2), (0, 0, 255), 1)
             
             # Visualize lines (Vertical)
             cv2.line(frame, (self.line_left_x, self.roi_y1), (self.line_left_x, self.roi_y2), (0, 255, 255), 2)
@@ -909,8 +1079,8 @@ class CarCounter:
                 if motion_debug.get('motion_bbox'):
                     mx1, my1, mx2, my2 = motion_debug['motion_bbox']
                     motion_area = (mx2 - mx1) * (my2 - my1)
-                    roi_area = (self.roi_x2 - self.roi_x1) * (self.roi_y2 - self.roi_y1)
-                    reduction_pct = 100.0 * (1 - motion_area / roi_area)
+                    motion_roi_area = (self.motion_roi_x2 - self.motion_roi_x1) * (self.motion_roi_y2 - self.motion_roi_y1)
+                    reduction_pct = 100.0 * (1 - motion_area / motion_roi_area) if motion_roi_area > 0 else 0
                     bbox_w = mx2 - mx1
                     bbox_h = my2 - my1
                     cv2.putText(frame, f"Inference: {bbox_w}x{bbox_h} ({reduction_pct:.0f}% smaller)", 
@@ -920,8 +1090,8 @@ class CarCounter:
                 # Draw motion contours on ROI
                 if 'contours' in motion_debug and len(motion_debug['contours']) > 0:
                     for contour in motion_debug['contours']:
-                        # Adjust contour coordinates from ROI to full frame
-                        contour_adjusted = contour + [self.roi_x1, self.roi_y1]
+                        # Adjust contour coordinates from motion ROI to full frame
+                        contour_adjusted = contour + [self.motion_roi_x1, self.motion_roi_y1]
                         area = cv2.contourArea(contour)
                         # Color code: green if above threshold, red if below
                         color = (0, 255, 0) if area > MOTION_MIN_AREA else (0, 0, 255)
@@ -930,11 +1100,11 @@ class CarCounter:
                 # Draw motion bounding box (inference area)
                 if 'motion_bbox' in motion_debug and motion_debug['motion_bbox']:
                     mx1, my1, mx2, my2 = motion_debug['motion_bbox']
-                    # Adjust from ROI space to frame space
-                    bbox_x1 = mx1 + self.roi_x1
-                    bbox_y1 = my1 + self.roi_y1
-                    bbox_x2 = mx2 + self.roi_x1
-                    bbox_y2 = my2 + self.roi_y1
+                    # Adjust from motion ROI space to frame space
+                    bbox_x1 = mx1 + self.motion_roi_x1
+                    bbox_y1 = my1 + self.motion_roi_y1
+                    bbox_x2 = mx2 + self.motion_roi_x1
+                    bbox_y2 = my2 + self.motion_roi_y1
                     
                     # Color and label based on usage
                     is_reused = motion_debug.get('bbox_reused', False)
@@ -960,12 +1130,28 @@ class CarCounter:
                 # Optionally show threshold mask as overlay in corner
                 if 'thresh_mask' in motion_debug:
                     thresh_resized = cv2.resize(motion_debug['thresh_mask'], 
-                                               (int((self.roi_x2 - self.roi_x1) * 0.3), 
-                                                int((self.roi_y2 - self.roi_y1) * 0.3)))
+                                               (int((self.motion_roi_x2 - self.motion_roi_x1) * 0.3), 
+                                                int((self.motion_roi_y2 - self.motion_roi_y1) * 0.3)))
                     thresh_colored = cv2.cvtColor(thresh_resized, cv2.COLOR_GRAY2BGR)
                     # Place in top-right corner
                     h, w = thresh_resized.shape
                     frame[10:10+h, frame.shape[1]-w-10:frame.shape[1]-10] = thresh_colored
+                    
+                    # Show transformed view below motion threshold (if perspective transform is active)
+                    if self.perspective_matrix is not None and roi_frame is not None:
+                        # Resize transformed view to same width as threshold mask
+                        aspect_ratio = self.perspective_dst_height / self.perspective_dst_width
+                        transform_w = w
+                        transform_h = int(w * aspect_ratio)
+                        transform_resized = cv2.resize(roi_frame, (transform_w, transform_h))
+                        
+                        # Place below threshold mask with small gap
+                        y_start = 10 + h + 10
+                        frame[y_start:y_start+transform_h, frame.shape[1]-transform_w-10:frame.shape[1]-10] = transform_resized
+                        
+                        # Add label
+                        cv2.putText(frame, "Straightened", (frame.shape[1]-transform_w-10, y_start-5),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
 
             # Display the frame (only in GUI mode)
             if not self.headless:
