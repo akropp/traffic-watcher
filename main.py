@@ -495,10 +495,6 @@ class CarCounter:
             if not has_motion:
                 # No motion detected - skip inference
                 self.inference_skipped_count += 1
-                if frame_count % 100 == 0 or self.frame_queue.qsize() > 1:
-                    skip_percent = (self.inference_skipped_count / frame_count) * 100
-                    queue_size = self.frame_queue.qsize()
-                    print(f"Processed {frame_count} frames (skipped {skip_percent:.1f}% due to no motion) [queue: {queue_size}/{self.frame_queue.maxsize}] {1.0 / frame_interval:.2f} FPS")
             
             else:
                 # Motion detected - run inference
@@ -714,13 +710,13 @@ class CarCounter:
                     break
             else:
                 # In headless mode, just keep processing
-                if frame_count % 100 == 0:
-                    queue_size = self.frame_queue.qsize()
+                queue_size = self.frame_queue.qsize()
+                if frame_count % 100 == 0 or queue_size > 1:
                     if MOTION_DETECTION:
                         skip_percent = (self.inference_skipped_count / frame_count) * 100
-                        print(f"Processed {frame_count} frames, detected {self.car_count} vehicles (skipped {skip_percent:.1f}% due to no motion) [queue: {queue_size}/10] {1.0 / frame_interval:.2f} FPS")
+                        print(f"Processed {frame_count} frames, detected {self.car_count} vehicles (skipped {skip_percent:.1f}% due to no motion) [queue: {queue_size}/{self.frame_queue.maxsize}] {1.0 / frame_interval:.2f} FPS")
                     else:
-                        print(f"Processed {frame_count} frames, detected {self.car_count} vehicles [queue: {queue_size}/10] {1.0 / frame_interval:.2f} FPS")
+                        print(f"Processed {frame_count} frames, detected {self.car_count} vehicles [queue: {queue_size}/{self.frame_queue.maxsize}] {1.0 / frame_interval:.2f} FPS")
         
         # Stop frame reader thread
         self.reader_running = False
