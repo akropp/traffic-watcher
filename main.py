@@ -104,6 +104,7 @@ class CarCounter:
         self.last_seen = {}        # track_id -> (x, time)
         self.vehicle_speeds = {}   # track_id -> speed
         self.vehicle_types = {}    # track_id -> vehicle type (most common via majority vote)
+        self.vehicle_types_locked = {}  # track_id -> first detected type (for merge matching)
         self.vehicle_type_history = defaultdict(list)  # track_id -> list of detected types (for majority vote)
         self.snapshot_frames = {}  # track_id -> frame (captured at midpoint for best view)
         self.ids_in_roi = set()    # track IDs currently in ROI
@@ -502,12 +503,9 @@ class CarCounter:
         best_distance = float('inf')
         
         for exit_id, (exit_time, exit_type) in list(self.pending_exits.items()):
-            # Check if exit was recent and vehicle type matches
+            # Check if exit was recent
             time_diff = current_time - exit_time
             
-            if vehicle_type != exit_type:
-                continue
-                
             if time_diff > self.reentry_time_threshold:
                 continue
             
@@ -523,7 +521,12 @@ class CarCounter:
                 # Use larger threshold if vehicle is progressing in expected direction
                 threshold = self.reentry_distance_threshold * 1.5 if is_progressing else self.reentry_distance_threshold
                 
-                if distance_diff <= threshold:
+                # For very close matches (likely same vehicle), allow type mismatch
+                # YOLO often misclassifies car/truck/bus at different viewing angles
+                is_very_close = distance_diff <= 100 and time_diff <= 0.5
+                types_match = vehicle_type == exit_type
+                
+                if distance_diff <= threshold and (types_match or is_very_close):
                     # Track best match (closest vehicle)
                     if distance_diff < best_distance:
                         best_distance = distance_diff
@@ -553,7 +556,8 @@ class CarCounter:
     def save_snapshot(self, frame_data, track_id, speed_mph, direction, duration, distance):
         timestamp_str = time.strftime("%Y%m%d_%H%M%S")
         timestamp_display = time.strftime("%Y-%m-%d %H:%M:%S")
-        vehicle_type = self.vehicle_types.get(track_id, "Vehicle").lower()
+        # Use locked type (first detection) for stable classification
+        vehicle_type = self.vehicle_types_locked.get(track_id, self.vehicle_types.get(track_id, "Vehicle")).lower()
         
         # Unpack frame data - could be tuple (full_frame, roi_frame) or just a frame
         if isinstance(frame_data, tuple):
@@ -854,7 +858,12 @@ class CarCounter:
                         # Record vehicle type for this frame (will use majority vote later)
                         vehicle_type = CLASS_NAMES.get(class_id, "Vehicle")
                         self.vehicle_type_history[track_id].append(vehicle_type)
-                        # Update cached type with current majority vote
+                        
+                        # Lock type on first detection (used for merge matching)
+                        if track_id not in self.vehicle_types_locked:
+                            self.vehicle_types_locked[track_id] = vehicle_type
+                        
+                        # Update cached type with current majority vote (for display/logging)
                         self.vehicle_types[track_id] = self.get_majority_vehicle_type(track_id)
                         
                         # Skip tracking if this ID was already counted (prevents re-counting same vehicle)
@@ -873,7 +882,9 @@ class CarCounter:
                         if track_id not in self.ids_in_roi:
                             
                             # Check if this is a re-entry of a pending exit (tracking glitch or ID reassignment)
-                            original_id = self.find_matching_pending_exit(center_x, vehicle_type, frame_timestamp)
+                            # Use locked type for matching to avoid type mismatch from fluctuating majority vote
+                            locked_type = self.vehicle_types_locked.get(track_id, vehicle_type)
+                            original_id = self.find_matching_pending_exit(center_x, locked_type, frame_timestamp)
                             
                             if original_id is not None:
                                 # This is the same vehicle - tracking glitch resolved or ID reassignment
@@ -889,6 +900,9 @@ class CarCounter:
                                 if original_id in self.vehicle_type_history:
                                     # Copy type history to preserve majority vote accuracy
                                     self.vehicle_type_history[track_id] = self.vehicle_type_history[original_id].copy()
+                                if original_id in self.vehicle_types_locked:
+                                    # Copy locked type to maintain merge consistency
+                                    self.vehicle_types_locked[track_id] = self.vehicle_types_locked[original_id]
                                 if original_id in self.snapshot_frames:
                                     self.snapshot_frames[track_id] = self.snapshot_frames[original_id]
                                 # Calculate distance for logging
@@ -942,7 +956,8 @@ class CarCounter:
                         cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (255, 0, 0), 2)
                         
                         # Draw label with type and speed if available
-                        vehicle_type = self.vehicle_types.get(track_id, "Vehicle")
+                        # Use locked type for consistent display (first detection)
+                        vehicle_type = self.vehicle_types_locked.get(track_id, self.vehicle_types.get(track_id, "Vehicle"))
                         label = f"{vehicle_type} {track_id}"
                         if track_id in self.vehicle_speeds:
                             label += f" {self.vehicle_speeds[track_id]:.1f} MPH"
@@ -952,11 +967,14 @@ class CarCounter:
                 # Check for vehicles that left ROI - add to pending exits
                 for track_id in self.ids_in_roi:
                     if track_id not in current_roi_ids:
-                        vehicle_type = self.vehicle_types.get(track_id, "Vehicle")
+                        # Use locked type for logging consistency
+                        vehicle_type = self.vehicle_types_locked.get(track_id, self.vehicle_types.get(track_id, "Vehicle"))
                         
                         # Vehicle left ROI - add to pending exits for confirmation
                         # Don't count yet, wait to see if it re-enters (tracking glitch) or truly exits
-                        self.pending_exits[track_id] = (frame_timestamp, vehicle_type)
+                        # Use locked type for merge matching consistency
+                        locked_type = self.vehicle_types_locked.get(track_id, vehicle_type)
+                        self.pending_exits[track_id] = (frame_timestamp, locked_type)
                         
                         # Log exit for debugging
                         if track_id in self.last_seen:
@@ -1055,6 +1073,7 @@ class CarCounter:
                     self.last_seen.pop(track_id, None)
                     self.vehicle_speeds.pop(track_id, None)
                     self.vehicle_types.pop(track_id, None)
+                    self.vehicle_types_locked.pop(track_id, None)
                     self.vehicle_type_history.pop(track_id, None)
                     self.snapshot_frames.pop(track_id, None)
                     # Keep original_id in counted_ids temporarily to prevent duplicate counts
