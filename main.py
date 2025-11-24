@@ -54,7 +54,7 @@ LINE_RIGHT_X_RATIO = 0.77
 # Region of Interest (ROI) for detection (0-1 relative to frame dimensions)
 # Top-Left (x, y) and Bottom-Right (x, y)
 ROI_TOP_LEFT_X = 0.52
-ROI_TOP_LEFT_Y = 0.01
+ROI_TOP_LEFT_Y = 0.0
 ROI_BOTTOM_RIGHT_X = 0.86
 ROI_BOTTOM_RIGHT_Y = 0.26 # Top half of the frame
 
@@ -93,6 +93,10 @@ class CarCounter:
         
         # Frame timestamp tracking
         self.last_frame_capture_time = None  # Capture timestamp of last processed frame
+        
+        # Motion detection state
+        self.last_motion_bbox = None  # Last detected motion bounding box
+        self.motion_bbox_reuse_count = 0  # How many frames we've reused the bbox
         
         # Create output directories
         os.makedirs("logs", exist_ok=True)
@@ -278,13 +282,69 @@ class CarCounter:
         largest_contour_area = max([cv2.contourArea(c) for c in contours], default=0)
         has_large_contour = largest_contour_area > MOTION_MIN_AREA
         
+        # Calculate bounding box around all motion (for targeted inference)
+        motion_bbox = None
+        if has_large_contour and len(contours) > 0:
+            # Get bounding boxes of all significant contours
+            significant_contours = [c for c in contours if cv2.contourArea(c) > MOTION_MIN_AREA]
+            if significant_contours:
+                # Find overall bounding box encompassing all motion
+                x_min, y_min = float('inf'), float('inf')
+                x_max, y_max = 0, 0
+                for contour in significant_contours:
+                    x, y, w, h = cv2.boundingRect(contour)
+                    x_min = min(x_min, x)
+                    y_min = min(y_min, y)
+                    x_max = max(x_max, x + w)
+                    y_max = max(y_max, y + h)
+                
+                # Add generous padding for YOLO context (150 pixels on each side)
+                # YOLO needs to see the whole vehicle, not just the motion pixels
+                x_padding = 150
+                y_padding = 100
+                roi_width = self.roi_x2 - self.roi_x1
+                roi_height = self.roi_y2 - self.roi_y1
+                x_min = max(0, x_min - x_padding)
+                y_min = max(0, y_min - y_padding)
+                x_max = min(roi_width, x_max + x_padding)
+                y_max = min(roi_height, y_max + y_padding)
+                
+                # Ensure minimum size for YOLO to work properly (at least 400x400)
+                bbox_width = x_max - x_min
+                bbox_height = y_max - y_min
+                min_size = 400
+                if bbox_width < min_size:
+                    expand = (min_size - bbox_width) / 2
+                    x_min = max(0, x_min - expand)
+                    x_max = min(roi_width, x_max + expand)
+                if bbox_height < min_size:
+                    expand = (min_size - bbox_height) / 2
+                    y_min = max(0, y_min - expand)
+                    y_max = min(roi_height, y_max + expand)
+                
+                motion_bbox = (int(x_min), int(y_min), int(x_max), int(y_max))
+                # Fresh detection - reset reuse count and store bbox
+                self.last_motion_bbox = motion_bbox
+                self.motion_bbox_reuse_count = 0
+        else:
+            # No contours detected - reuse last bbox for 1 frame if available
+            if self.last_motion_bbox is not None and self.motion_bbox_reuse_count < 1:
+                motion_bbox = self.last_motion_bbox
+                self.motion_bbox_reuse_count += 1
+            else:
+                # Either no previous bbox or already reused it, clear everything
+                self.last_motion_bbox = None
+                self.motion_bbox_reuse_count = 0
+        
         # Store debug info
         debug_info = {
             'changed_pixels': changed_pixels,
             'largest_contour': largest_contour_area,
             'thresh_mask': thresh,
             'contours': contours,
-            'has_large_contour': has_large_contour
+            'has_large_contour': has_large_contour,
+            'motion_bbox': motion_bbox,
+            'bbox_reused': self.motion_bbox_reuse_count > 0  # Flag if we're reusing last frame's bbox
         }
         
         # Update previous frame
@@ -516,9 +576,20 @@ class CarCounter:
                 # Motion detected - run inference
                 self.motion_detected_count += 1
 
-                # Run YOLOv8 tracking on the CROP
-                # We don't need imgsz=1280 anymore because the crop is small and focused
-                results = self.model.track(roi_frame, persist=True, classes=VEHICLE_CLASSES, verbose=False, conf=0.25)
+                # Use motion bounding box if available (for faster inference)
+                inference_frame = roi_frame
+                motion_offset_x = 0
+                motion_offset_y = 0
+                
+                if motion_debug and motion_debug.get('motion_bbox'):
+                    # Crop to motion area for faster inference
+                    mx1, my1, mx2, my2 = motion_debug['motion_bbox']
+                    inference_frame = roi_frame[my1:my2, mx1:mx2]
+                    motion_offset_x = mx1
+                    motion_offset_y = my1
+
+                # Run YOLOv8 tracking on the cropped area
+                results = self.model.track(inference_frame, persist=True, classes=VEHICLE_CLASSES, verbose=False, conf=0.25)
                 
                 current_roi_ids = set()
                 
@@ -529,10 +600,19 @@ class CarCounter:
                     classes = results[0].boxes.cls.int().cpu().tolist()
                     
                     for xywh, xyxy, track_id, class_id in zip(boxes_xywh, boxes_xyxy, track_ids, classes):
-                        # Adjust coordinates from ROI-relative to Frame-relative
-                        x_roi, y_roi, w, h = xywh
-                        x1_roi, y1_roi, x2_roi, y2_roi = xyxy
+                        # Adjust coordinates from inference-crop to ROI to Frame
+                        x_crop, y_crop, w, h = xywh
+                        x1_crop, y1_crop, x2_crop, y2_crop = xyxy
                         
+                        # First adjust from crop to ROI space
+                        x_roi = x_crop + motion_offset_x
+                        y_roi = y_crop + motion_offset_y
+                        x1_roi = x1_crop + motion_offset_x
+                        y1_roi = y1_crop + motion_offset_y
+                        x2_roi = x2_crop + motion_offset_x
+                        y2_roi = y2_crop + motion_offset_y
+                        
+                        # Then adjust from ROI to frame space
                         x = x_roi + self.roi_x1
                         y = y_roi + self.roi_y1
                         
@@ -749,6 +829,18 @@ class CarCounter:
                 if largest_contour > 10:
                     print(f"Largest Contour: {int(largest_contour)} / {MOTION_MIN_AREA}")
                 
+                # Show inference area reduction
+                if motion_debug.get('motion_bbox'):
+                    mx1, my1, mx2, my2 = motion_debug['motion_bbox']
+                    motion_area = (mx2 - mx1) * (my2 - my1)
+                    roi_area = (self.roi_x2 - self.roi_x1) * (self.roi_y2 - self.roi_y1)
+                    reduction_pct = 100.0 * (1 - motion_area / roi_area)
+                    bbox_w = mx2 - mx1
+                    bbox_h = my2 - my1
+                    cv2.putText(frame, f"Inference: {bbox_w}x{bbox_h} ({reduction_pct:.0f}% smaller)", 
+                               (20, y_offset + 105), font, 0.6, (255, 255, 0), 2)
+                    print(f"Inference Area: {bbox_w}x{bbox_h} ({reduction_pct:.0f}% smaller)")
+                
                 # Draw motion contours on ROI
                 if 'contours' in motion_debug and len(motion_debug['contours']) > 0:
                     for contour in motion_debug['contours']:
@@ -758,6 +850,23 @@ class CarCounter:
                         # Color code: green if above threshold, red if below
                         color = (0, 255, 0) if area > MOTION_MIN_AREA else (0, 0, 255)
                         cv2.drawContours(frame, [contour_adjusted], -1, color, 2)
+                
+                # Draw motion bounding box (inference area)
+                if 'motion_bbox' in motion_debug and motion_debug['motion_bbox']:
+                    mx1, my1, mx2, my2 = motion_debug['motion_bbox']
+                    # Adjust from ROI space to frame space
+                    bbox_x1 = mx1 + self.roi_x1
+                    bbox_y1 = my1 + self.roi_y1
+                    bbox_x2 = mx2 + self.roi_x1
+                    bbox_y2 = my2 + self.roi_y1
+                    # Draw in cyan for fresh detection, orange if reused
+                    is_reused = motion_debug.get('bbox_reused', False)
+                    bbox_color = (0, 165, 255) if is_reused else (255, 255, 0)  # Orange if reused, cyan if fresh
+                    cv2.rectangle(frame, (bbox_x1, bbox_y1), (bbox_x2, bbox_y2), bbox_color, 3)
+                    # Add label
+                    label = "Inference Area (reused)" if is_reused else "Inference Area"
+                    cv2.putText(frame, label, (bbox_x1 + 5, bbox_y1 + 20), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, bbox_color, 2)
                 
                 # Optionally show threshold mask as overlay in corner
                 if 'thresh_mask' in motion_debug:
