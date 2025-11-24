@@ -25,7 +25,7 @@ except ImportError:
 VIDEO_SOURCE = os.getenv('VIDEO_SOURCE', 'rtsp://frigate.thekropp.com:8554/driveway')
 
 # Real world distance between the two lines (in meters)
-DISTANCE_METERS = 10.0
+DISTANCE_METERS = 13.0
 
 # Maximum time allowed between line crossings (seconds) - prevents false positives from stale timers
 MAX_CROSSING_DURATION = 10.0
