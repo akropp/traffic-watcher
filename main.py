@@ -180,8 +180,8 @@ class CarCounter:
         self.roi_y2 = int(self.height * ROI_BOTTOM_RIGHT_Y)
         
         # Thresholds for merging rapid re-entries (scaled with VIDEO_SCALE)
-        self.reentry_time_threshold = 1.5  # seconds
-        self.reentry_distance_threshold = int(400 * VIDEO_SCALE)  # pixels, scaled
+        self.reentry_time_threshold = 2.0  # seconds - increased to catch more re-entries
+        self.reentry_distance_threshold = int(800 * VIDEO_SCALE)  # pixels, scaled - increased for moving vehicles
         self.stationary_distance_threshold = int(50 * VIDEO_SCALE)  # pixels, scaled
         
         print(f"Video Source: {self.width}x{self.height} @ {self.fps} FPS")
@@ -368,21 +368,41 @@ class CarCounter:
 
     def find_matching_pending_exit(self, center_x, vehicle_type, current_time):
         """Check if this entry matches a pending exit (vehicle re-entering, or tracking glitch resolved)"""
+        best_match = None
+        best_distance = float('inf')
+        
         for exit_id, (exit_time, exit_type) in list(self.pending_exits.items()):
             # Check if exit was recent and vehicle type matches
             time_diff = current_time - exit_time
+            
+            if vehicle_type != exit_type:
+                continue
+                
+            if time_diff > self.reentry_time_threshold:
+                continue
             
             # Use last known position for distance check
             if exit_id in self.last_seen:
                 exit_x, _ = self.last_seen[exit_id]
                 distance_diff = abs(center_x - exit_x)
                 
-                if (time_diff <= self.reentry_time_threshold and 
-                    distance_diff <= self.reentry_distance_threshold and
-                    vehicle_type == exit_type):
-                    # Found a match - remove from pending exits and return the original ID
-                    del self.pending_exits[exit_id]
-                    return exit_id
+                # If moving in same direction (vehicle progressing through ROI), be more lenient
+                # Northbound = X increasing, Southbound = X decreasing
+                is_progressing = (center_x > exit_x) if exit_x < self.line_left_x or center_x > self.line_right_x else (center_x < exit_x)
+                
+                # Use larger threshold if vehicle is progressing in expected direction
+                threshold = self.reentry_distance_threshold * 1.5 if is_progressing else self.reentry_distance_threshold
+                
+                if distance_diff <= threshold:
+                    # Track best match (closest vehicle)
+                    if distance_diff < best_distance:
+                        best_distance = distance_diff
+                        best_match = exit_id
+        
+        # Return and remove the best match
+        if best_match is not None:
+            del self.pending_exits[best_match]
+            return best_match
         
         return None
 
@@ -664,11 +684,28 @@ class CarCounter:
                                     self.vehicle_speeds[track_id] = self.vehicle_speeds[original_id]
                                 if original_id in self.snapshot_frames:
                                     self.snapshot_frames[track_id] = self.snapshot_frames[original_id]
-                                self.log_message(f"{vehicle_type} {track_id} resumed tracking (merged with ID {original_id}) at X={center_x:.1f}")
+                                # Calculate distance for logging
+                                if original_id in self.last_seen:
+                                    exit_x, _ = self.last_seen[original_id]
+                                    distance = abs(center_x - exit_x)
+                                    self.log_message(f"{vehicle_type} {track_id} resumed tracking (merged with ID {original_id}, moved {distance:.0f}px) at X={center_x:.1f}")
+                                else:
+                                    self.log_message(f"{vehicle_type} {track_id} resumed tracking (merged with ID {original_id}) at X={center_x:.1f}")
                             else:
                                 # New vehicle entry
                                 self.first_seen[track_id] = (center_x, frame_timestamp)
                                 self.log_message(f"{vehicle_type} {track_id} entered ROI at X={center_x:.1f}")
+                                # Debug: show pending exits to help diagnose merge failures
+                                if len(self.pending_exits) > 0:
+                                    pending_info = []
+                                    for pid, (ptime, ptype) in self.pending_exits.items():
+                                        if pid in self.last_seen:
+                                            px, _ = self.last_seen[pid]
+                                            dist = abs(center_x - px)
+                                            time_diff = frame_timestamp - ptime
+                                            pending_info.append(f"ID {pid} ({ptype}) at X={px:.0f}, dist={dist:.0f}px, time={time_diff:.1f}s")
+                                    if pending_info:
+                                        self.log_message(f"  Pending exits: {'; '.join(pending_info)}")
                         
                         # Always update last seen position
                         self.last_seen[track_id] = (center_x, frame_timestamp)
