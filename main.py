@@ -1182,7 +1182,7 @@ class CarCounter:
                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, bbox_color, 2)
                 
                 # Optionally show threshold mask as overlay in corner
-                if 'thresh_mask' in motion_debug:
+                if motion_debug and 'thresh_mask' in motion_debug:
                     thresh_resized = cv2.resize(motion_debug['thresh_mask'], 
                                                (int((self.motion_roi_x2 - self.motion_roi_x1) * 0.3), 
                                                 int((self.motion_roi_y2 - self.motion_roi_y1) * 0.3)))
@@ -1191,21 +1191,27 @@ class CarCounter:
                     h, w = thresh_resized.shape
                     frame[10:10+h, frame.shape[1]-w-10:frame.shape[1]-10] = thresh_colored
                     
-                    # Show transformed view below motion threshold (if perspective transform is active)
-                    if self.perspective_matrix is not None and roi_frame is not None:
-                        # Resize transformed view to same width as threshold mask
-                        aspect_ratio = self.perspective_dst_height / self.perspective_dst_width
-                        transform_w = w
-                        transform_h = int(w * aspect_ratio)
-                        transform_resized = cv2.resize(roi_frame, (transform_w, transform_h))
-                        
-                        # Place below threshold mask with small gap
-                        y_start = 10 + h + 10
-                        frame[y_start:y_start+transform_h, frame.shape[1]-transform_w-10:frame.shape[1]-10] = transform_resized
-                        
-                        # Add label
-                        cv2.putText(frame, "Straightened", (frame.shape[1]-transform_w-10, y_start-5),
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
+            # Show transformed view in corner (if perspective transform is active)
+            # Display this regardless of motion detection state
+            if not self.headless and self.perspective_matrix is not None:
+                # Use a fixed preview size
+                preview_width = 400
+                aspect_ratio = self.perspective_dst_height / self.perspective_dst_width
+                preview_height = int(preview_width * aspect_ratio)
+                transform_resized = cv2.resize(roi_frame, (preview_width, preview_height))
+                
+                # Place in top-right corner (below motion threshold if present)
+                y_start = 10
+                if motion_debug and 'thresh_mask' in motion_debug:
+                    # Calculate motion preview height to position below it
+                    motion_h = int((self.motion_roi_y2 - self.motion_roi_y1) * 0.3)
+                    y_start = 10 + motion_h + 10
+                
+                frame[y_start:y_start+preview_height, frame.shape[1]-preview_width-10:frame.shape[1]-10] = transform_resized
+                
+                # Add label
+                cv2.putText(frame, "Straightened", (frame.shape[1]-preview_width-10, y_start-5),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
 
             # Display the frame (only in GUI mode)
             if not self.headless:
