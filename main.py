@@ -881,14 +881,35 @@ class CarCounter:
                         # Log entry and record first position
                         if track_id not in self.ids_in_roi:
                             
-                            # Check if this is a re-entry of a pending exit (tracking glitch or ID reassignment)
-                            # Use locked type for matching to avoid type mismatch from fluctuating majority vote
-                            locked_type = self.vehicle_types_locked.get(track_id, vehicle_type)
-                            original_id = self.find_matching_pending_exit(center_x, locked_type, frame_timestamp)
+                            # First check if this is an ID switch from a currently tracked vehicle
+                            # (YOLO sometimes reassigns IDs during active tracking)
+                            original_id = None
+                            for existing_id in self.ids_in_roi:
+                                if existing_id in self.last_seen:
+                                    existing_x, existing_time = self.last_seen[existing_id]
+                                    distance = abs(center_x - existing_x)
+                                    time_diff = abs(frame_timestamp - existing_time)
+                                    # Very close match suggests ID reassignment
+                                    if distance <= 150 and time_diff <= 0.3:
+                                        original_id = existing_id
+                                        self.log_message(f"{vehicle_type} {track_id} appears to be ID reassignment from {existing_id} (distance={distance:.0f}px)")
+                                        break
+                            
+                            # If not an active ID switch, check if this is a re-entry of a pending exit
+                            if original_id is None:
+                                # Use locked type for matching to avoid type mismatch from fluctuating majority vote
+                                locked_type = self.vehicle_types_locked.get(track_id, vehicle_type)
+                                original_id = self.find_matching_pending_exit(center_x, locked_type, frame_timestamp)
                             
                             if original_id is not None:
                                 # This is the same vehicle - tracking glitch resolved or ID reassignment
                                 self.id_mapping[track_id] = original_id
+                                
+                                # If this was an active ID reassignment (original still in ROI), 
+                                # add original to current_roi_ids to prevent it being counted as an exit
+                                if original_id in self.ids_in_roi:
+                                    current_roi_ids.add(original_id)
+                                
                                 # Copy tracking data from original ID
                                 if original_id in self.first_seen:
                                     self.first_seen[track_id] = self.first_seen[original_id]
