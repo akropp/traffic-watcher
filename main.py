@@ -103,13 +103,16 @@ class CarCounter:
         self.first_seen = {}       # track_id -> (x, time)
         self.last_seen = {}        # track_id -> (x, time)
         self.vehicle_speeds = {}   # track_id -> speed
-        self.vehicle_types = {}    # track_id -> vehicle type
+        self.vehicle_types = {}    # track_id -> vehicle type (most common via majority vote)
+        self.vehicle_type_history = defaultdict(list)  # track_id -> list of detected types (for majority vote)
         self.snapshot_frames = {}  # track_id -> frame (captured at midpoint for best view)
         self.ids_in_roi = set()    # track IDs currently in ROI
         self.pending_exits = {}    # track_id -> (exit_time, vehicle_type) - vehicles that left ROI, waiting to confirm and count
         self.id_mapping = {}       # new_id -> original_id - for tracking ID reassignments
         self.counted_ids = set()   # track IDs that have already been counted (prevents duplicate counts)
-        self.exit_confirmation_time = 0.5  # seconds to wait before finalizing count (allow tracking glitches to resolve)
+        self.counted_ids_timestamp = {}  # track_id -> timestamp when counted (for cleanup)
+        self.counted_id_retention_time = 10.0  # seconds to retain counted IDs before allowing reuse
+        self.exit_confirmation_time = 2.5  # seconds to wait before finalizing count (handles tree occlusions and tracking glitches)
         self.car_count = 0
         self.headless = headless
         self.running = True
@@ -482,6 +485,17 @@ class CarCounter:
         debug_info['reason'] = 'no_motion'
         return False, debug_info
 
+    def get_majority_vehicle_type(self, track_id):
+        """Get the most common vehicle type for this track ID using majority vote"""
+        if track_id not in self.vehicle_type_history or not self.vehicle_type_history[track_id]:
+            return "Vehicle"
+        
+        # Count occurrences of each type
+        from collections import Counter
+        type_counts = Counter(self.vehicle_type_history[track_id])
+        # Return the most common type
+        return type_counts.most_common(1)[0][0]
+
     def find_matching_pending_exit(self, center_x, vehicle_type, current_time):
         """Check if this entry matches a pending exit (vehicle re-entering, or tracking glitch resolved)"""
         best_match = None
@@ -837,9 +851,11 @@ class CarCounter:
                             if not (self.roi_x1 <= center_x <= self.roi_x2 and self.roi_y1 <= center_y <= self.roi_y2):
                                 continue
                         
-                        # Store vehicle type
+                        # Record vehicle type for this frame (will use majority vote later)
                         vehicle_type = CLASS_NAMES.get(class_id, "Vehicle")
-                        self.vehicle_types[track_id] = vehicle_type
+                        self.vehicle_type_history[track_id].append(vehicle_type)
+                        # Update cached type with current majority vote
+                        self.vehicle_types[track_id] = self.get_majority_vehicle_type(track_id)
                         
                         # Skip tracking if this ID was already counted (prevents re-counting same vehicle)
                         if track_id in self.counted_ids:
@@ -870,6 +886,9 @@ class CarCounter:
                                     self.first_seen[track_id] = (center_x, frame_timestamp)
                                 if original_id in self.vehicle_speeds:
                                     self.vehicle_speeds[track_id] = self.vehicle_speeds[original_id]
+                                if original_id in self.vehicle_type_history:
+                                    # Copy type history to preserve majority vote accuracy
+                                    self.vehicle_type_history[track_id] = self.vehicle_type_history[original_id].copy()
                                 if original_id in self.snapshot_frames:
                                     self.snapshot_frames[track_id] = self.snapshot_frames[original_id]
                                 # Calculate distance for logging
@@ -987,6 +1006,7 @@ class CarCounter:
                                 if original_id not in self.counted_ids:
                                     self.car_count += 1
                                     self.counted_ids.add(original_id)
+                                    self.counted_ids_timestamp[original_id] = frame_timestamp
                                     self.log_message(f"SAW {vehicle_type.upper()}: id={track_id}, speed={speed_mph:.1f} MPH, dir={direction}, distance={distance_meters:.1f}m, time={duration:.1f}s, total count={self.car_count}")
                                     # Use stored snapshot frame if available, otherwise use current frame
                                     snapshot_frame = self.snapshot_frames.get(track_id, frame)
@@ -1000,6 +1020,7 @@ class CarCounter:
                                 if original_id not in self.counted_ids:
                                     self.car_count += 1
                                     self.counted_ids.add(original_id)
+                                    self.counted_ids_timestamp[original_id] = frame_timestamp
                                     
                                     if duration == 0.0:
                                         self.log_message(f"SAW {vehicle_type.upper()}: id={track_id} (single-frame detection, no speed data), total count={self.car_count}")
@@ -1018,6 +1039,7 @@ class CarCounter:
                             if original_id not in self.counted_ids:
                                 self.car_count += 1
                                 self.counted_ids.add(original_id)
+                                self.counted_ids_timestamp[original_id] = frame_timestamp
                                 self.log_message(f"SAW {vehicle_type.upper()}: id={track_id} (no tracking data), total count={self.car_count}")
                                 
                                 # Try to save snapshot if we have one
@@ -1033,11 +1055,23 @@ class CarCounter:
                     self.last_seen.pop(track_id, None)
                     self.vehicle_speeds.pop(track_id, None)
                     self.vehicle_types.pop(track_id, None)
+                    self.vehicle_type_history.pop(track_id, None)
                     self.snapshot_frames.pop(track_id, None)
-                    # Clean up counted_ids to allow ID reuse
-                    original_id = self.id_mapping.get(track_id, track_id)
-                    self.counted_ids.discard(original_id)
+                    # Keep original_id in counted_ids temporarily to prevent duplicate counts
+                    # (e.g., tree occlusion where YOLO maintains same ID)
+                    # Will be cleaned up after retention time expires
                     self.id_mapping.pop(track_id, None)
+                
+                # Clean up old counted IDs after retention time expires
+                # This allows YOLO to reuse IDs for genuinely new vehicles after sufficient time
+                expired_ids = []
+                for counted_id, count_time in self.counted_ids_timestamp.items():
+                    if frame_timestamp - count_time > self.counted_id_retention_time:
+                        expired_ids.append(counted_id)
+                
+                for counted_id in expired_ids:
+                    self.counted_ids.discard(counted_id)
+                    self.counted_ids_timestamp.pop(counted_id, None)
 
             # Visualize ROI
             if self.perspective_matrix is not None:
