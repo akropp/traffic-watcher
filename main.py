@@ -536,18 +536,37 @@ class CarCounter:
             with open(self.log_file, "a") as f:
                 f.write(full_msg + "\n")
 
-    def save_snapshot(self, frame, track_id, speed_mph, direction, duration, distance):
+    def save_snapshot(self, frame_data, track_id, speed_mph, direction, duration, distance):
         timestamp_str = time.strftime("%Y%m%d_%H%M%S")
         timestamp_display = time.strftime("%Y-%m-%d %H:%M:%S")
         vehicle_type = self.vehicle_types.get(track_id, "Vehicle").lower()
         
+        # Unpack frame data - could be tuple (full_frame, roi_frame) or just a frame
+        if isinstance(frame_data, tuple):
+            full_frame, roi_frame = frame_data
+        else:
+            # Backwards compatibility - if it's just a frame, use it for both
+            full_frame = frame_data
+            roi_frame = None
+        
         # Save original full frame (as-is, no overlay)
         filename_full = f"snapshots/{vehicle_type}_{track_id}_{timestamp_str}_full.jpg"
-        cv2.imwrite(filename_full, frame)
+        cv2.imwrite(filename_full, full_frame)
         
         # Create ROI-only snapshot with text overlay
         filename_roi = f"snapshots/{vehicle_type}_{track_id}_{timestamp_str}.jpg"
-        roi_snapshot = frame[self.roi_y1:self.roi_y2, self.roi_x1:self.roi_x2].copy()
+        if roi_frame is not None:
+            # Use the transformed/warped ROI frame directly
+            roi_snapshot = roi_frame.copy()
+        else:
+            # Fallback: crop from full frame using motion ROI if perspective transform is active
+            if self.perspective_matrix is not None:
+                # Use motion ROI coordinates (original frame space)
+                roi_snapshot = full_frame[self.motion_roi_y1:self.motion_roi_y2, 
+                                         self.motion_roi_x1:self.motion_roi_x2].copy()
+            else:
+                # Use standard ROI coordinates
+                roi_snapshot = full_frame[self.roi_y1:self.roi_y2, self.roi_x1:self.roi_x2].copy()
         
         # Add text overlay to ROI snapshot in corner
         font = cv2.FONT_HERSHEY_SIMPLEX
@@ -880,10 +899,11 @@ class CarCounter:
                         self.last_seen[track_id] = (center_x, frame_timestamp)
                         
                         # Capture snapshot frame when vehicle is well into ROI for best image
+                        # Store both full frame and roi_frame (transformed if using perspective)
                         # Capture at midpoint between entry and current position, or on first few frames
                         if track_id in self.first_seen and track_id not in self.snapshot_frames:
                             # Capture on first detection
-                            self.snapshot_frames[track_id] = frame.copy()
+                            self.snapshot_frames[track_id] = (frame.copy(), roi_frame.copy())
                         elif track_id in self.first_seen:
                             # Update snapshot if vehicle is near middle of travel distance
                             first_x, _ = self.first_seen[track_id]
@@ -891,7 +911,7 @@ class CarCounter:
                             roi_width = self.roi_x2 - self.roi_x1
                             # Update snapshot when vehicle is roughly in middle third of ROI
                             if distance_traveled > roi_width * 0.2 and distance_traveled < roi_width * 0.6:
-                                self.snapshot_frames[track_id] = frame.copy()
+                                self.snapshot_frames[track_id] = (frame.copy(), roi_frame.copy())
                         
                         # Store track history for visualization
                         track = self.track_history[track_id]
