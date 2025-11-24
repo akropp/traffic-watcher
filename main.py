@@ -38,8 +38,8 @@ SKIP_INFERENCE = os.getenv('SKIP_INFERENCE', 'false').lower() == 'true'
 
 # Motion detection settings
 MOTION_DETECTION = os.getenv('MOTION_DETECTION', 'true').lower() == 'true'
-MOTION_THRESHOLD = int(os.getenv('MOTION_THRESHOLD', '500'))  # Pixels changed threshold
-MOTION_MIN_AREA = int(os.getenv('MOTION_MIN_AREA', '100'))    # Minimum contour area
+MOTION_THRESHOLD = int(os.getenv('MOTION_THRESHOLD', '2000'))  # Pixels changed threshold
+MOTION_MIN_AREA = int(os.getenv('MOTION_MIN_AREA', '500'))    # Minimum contour area
 
 # Video downsampling scale (0.5 = half resolution, 1.0 = original)
 # Lower values = faster processing but less accurate detection
@@ -242,14 +242,16 @@ class CarCounter:
         print("[Frame Reader] Thread stopped")
     
     def detect_motion(self, frame, frame_timestamp):
-        """Detect motion in ROI using frame differencing"""
+        """Detect motion in ROI using frame differencing
+        Returns: (has_motion, motion_debug_info)
+        """
         if not MOTION_DETECTION:
-            return True  # Always run inference if motion detection disabled
+            return True, None  # Always run inference if motion detection disabled
         
         # Always run inference if we're actively tracking vehicles
         if len(self.ids_in_roi) > 0:
             self.last_motion_time = frame_timestamp  # Reset timer while tracking
-            return True
+            return True, {'reason': 'tracking', 'changed_pixels': 0, 'largest_contour': 0}
         
         # Extract ROI
         roi = frame[self.roi_y1:self.roi_y2, self.roi_x1:self.roi_x2]
@@ -261,7 +263,7 @@ class CarCounter:
         # First frame initialization
         if self.prev_gray is None:
             self.prev_gray = gray
-            return True
+            return True, {'reason': 'init', 'changed_pixels': 0, 'largest_contour': 0}
         
         # Compute absolute difference
         frame_delta = cv2.absdiff(self.prev_gray, gray)
@@ -273,23 +275,36 @@ class CarCounter:
         
         # Count total changed pixels and check for large contours
         changed_pixels = cv2.countNonZero(thresh)
-        has_large_contour = any(cv2.contourArea(c) > MOTION_MIN_AREA for c in contours)
+        largest_contour_area = max([cv2.contourArea(c) for c in contours], default=0)
+        has_large_contour = largest_contour_area > MOTION_MIN_AREA
+        
+        # Store debug info
+        debug_info = {
+            'changed_pixels': changed_pixels,
+            'largest_contour': largest_contour_area,
+            'thresh_mask': thresh,
+            'contours': contours,
+            'has_large_contour': has_large_contour
+        }
         
         # Update previous frame
         self.prev_gray = gray
         
-        # Motion detected if enough pixels changed AND we have a solid motion region
-        if changed_pixels > MOTION_THRESHOLD and has_large_contour:
+        # Motion detected if enough pixels changed OR we have a solid motion region
+        if changed_pixels > MOTION_THRESHOLD or has_large_contour:
             self.last_motion_time = frame_timestamp
-            return True
+            debug_info['reason'] = 'motion'
+            return True, debug_info
         
-        # Continue running inference for 10 seconds after motion stops
+        # Continue running inference for 5 seconds after motion stops
         # Frame-based grace period ensures consistent behavior regardless of processing speed
         time_since_motion = frame_timestamp - self.last_motion_time
-        if time_since_motion < 10.0:  # 10 second grace period
-            return True
+        if time_since_motion < 5.0:  # 5 second grace period
+            debug_info['reason'] = f'grace ({5.0 - time_since_motion:.1f}s left)'
+            return True, debug_info
         
-        return False
+        debug_info['reason'] = 'no_motion'
+        return False, debug_info
 
     def find_matching_pending_exit(self, center_x, vehicle_type, current_time):
         """Check if this entry matches a pending exit (vehicle re-entering, or tracking glitch resolved)"""
@@ -420,6 +435,7 @@ class CarCounter:
         retry_count = 0
         reconnect_attempts = 0
         frame_count = 0
+        motion_debug = None  # For motion detection visualization
         
         # Use frame-based timestamps instead of wall clock for accurate speed calculations
         # This accounts for frame drops and processing delays
@@ -489,7 +505,7 @@ class CarCounter:
                 continue
 
             # Check for motion before running expensive YOLO inference
-            has_motion = self.detect_motion(frame, frame_timestamp)
+            has_motion, motion_debug = self.detect_motion(frame, frame_timestamp)
             frame_count += 1
             
             if not has_motion:
@@ -701,6 +717,57 @@ class CarCounter:
 
             # Draw Total Count
             cv2.putText(frame, f"Count: {self.car_count}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+
+            # Draw motion detection debug info (only in GUI mode)
+            if not self.headless and MOTION_DETECTION and motion_debug:
+                y_offset = 80
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                
+                # Motion status with colored background
+                if motion_debug.get('reason') == 'motion':
+                    status_color = (0, 255, 0)  # Green for active motion
+                    status_text = "MOTION DETECTED"
+                elif motion_debug.get('reason') == 'no_motion':
+                    status_color = (0, 0, 255)  # Red for no motion
+                    status_text = "NO MOTION"
+                else:
+                    status_color = (0, 255, 255)  # Yellow for other states
+                    status_text = motion_debug.get('reason', '').upper()
+                
+                cv2.putText(frame, status_text, (20, y_offset), font, 0.7, status_color, 2)
+                
+                # Motion metrics
+                changed_px = motion_debug.get('changed_pixels', 0)
+                largest_contour = motion_debug.get('largest_contour', 0)
+                
+                cv2.putText(frame, f"Changed Pixels: {changed_px} / {MOTION_THRESHOLD}", 
+                           (20, y_offset + 35), font, 0.6, (0, 0, 255), 2)
+                cv2.putText(frame, f"Largest Contour: {int(largest_contour)} / {MOTION_MIN_AREA}", 
+                           (20, y_offset + 70), font, 0.6, (0, 0, 255), 2)
+                if changed_px > 10:
+                    print(f"Changed Pixels: {changed_px} / {MOTION_THRESHOLD}")
+                if largest_contour > 10:
+                    print(f"Largest Contour: {int(largest_contour)} / {MOTION_MIN_AREA}")
+                
+                # Draw motion contours on ROI
+                if 'contours' in motion_debug and len(motion_debug['contours']) > 0:
+                    for contour in motion_debug['contours']:
+                        # Adjust contour coordinates from ROI to full frame
+                        contour_adjusted = contour + [self.roi_x1, self.roi_y1]
+                        area = cv2.contourArea(contour)
+                        # Color code: green if above threshold, red if below
+                        color = (0, 255, 0) if area > MOTION_MIN_AREA else (0, 0, 255)
+                        cv2.drawContours(frame, [contour_adjusted], -1, color, 2)
+                
+                # Optionally show threshold mask as overlay in corner
+                if 'thresh_mask' in motion_debug:
+                    thresh_resized = cv2.resize(motion_debug['thresh_mask'], 
+                                               (int((self.roi_x2 - self.roi_x1) * 0.3), 
+                                                int((self.roi_y2 - self.roi_y1) * 0.3)))
+                    thresh_colored = cv2.cvtColor(thresh_resized, cv2.COLOR_GRAY2BGR)
+                    # Place in top-right corner
+                    h, w = thresh_resized.shape
+                    frame[10:10+h, frame.shape[1]-w-10:frame.shape[1]-10] = thresh_colored
 
             # Display the frame (only in GUI mode)
             if not self.headless:
