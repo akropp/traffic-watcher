@@ -706,12 +706,23 @@ class CarCounter:
             except queue.Empty:
                 retry_count += 1
                 if retry_count > 10:
-                    print("Warning: No frames received for 10 seconds, stream may be disconnected")
+                    print("Warning: No frames received for 10 seconds, attempting reconnection...")
                     retry_count = 0
+                    # Force reconnection even if cap reports as opened
+                    if self.reconnect_stream():
+                        print("Reconnection successful, resuming processing")
+                    else:
+                        reconnect_attempts += 1
+                        if reconnect_attempts > 3:
+                            print("Error: Failed to reconnect after 3 attempts. Exiting.")
+                            break
+                        print(f"Reconnection failed, will retry (attempt {reconnect_attempts}/3)")
+                        time.sleep(5)
                 continue
             
-            # Reset retry count on success
+            # Reset retry count and reconnect attempts on success
             retry_count = 0
+            reconnect_attempts = 0
             
             # Calculate actual interval from capture timestamps
             if self.last_frame_capture_time is not None:
